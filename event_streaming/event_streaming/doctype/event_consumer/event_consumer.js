@@ -13,42 +13,5 @@ frappe.ui.form.on("Event Consumer", {
 			}
 			return indicator;
 		});
-
-		frm.add_custom_button(__('Set Host Name'), function () {
-			let d = new frappe.ui.Dialog({
-			  title: 'Enter URL details',
-			  fields: [
-				{
-				  label: 'Site domain ie https://hmisv2.tiberbu.app',
-				  fieldname: 'url',
-				  fieldtype: 'Data'
-				},
-			  ],
-			  size: 'small', // small, large, extra-large 
-			  primary_action_label: 'Submit',
-			  primary_action(values) {
-				console.log(values);
-				frappe.call({
-				  method: "hmis.hmis.utilities.site_config.set_hostname",
-				  args: {
-					url: values.url
-				  },
-				  callback: r => {
-	  
-				  }
-				}).then(r => {
-				  frappe.msgprint(`Hostname  updated successfully`);
-				  frm.reload_doc();
-	  
-				})
-	  
-				d.hide();
-				d.hide();
-			  }
-			});
-	  
-			d.show();
-		  });
-
 	},
 });
