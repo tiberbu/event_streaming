@@ -12,9 +12,8 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_field
 from frappe.frappeclient import FrappeClient
 from frappe.model.document import Document
 from frappe.utils.background_jobs import get_jobs
-from frappe.utils.data import get_link_to_form, get_url
+from frappe.utils.data import get_link_to_form
 from frappe.utils.password import get_decrypted_password
-
 
 class EventProducer(Document):
 	def before_insert(self):
@@ -567,3 +566,11 @@ def resync(update):
 		update = get_mapped_update(update, producer_site)
 		update.data = json.loads(update.data)
 	return sync(update, producer_site, event_producer, in_retry=True)
+
+
+# TIBERBU CUSTOMIZATIONS
+
+def get_url():
+    site_config = frappe.local.conf
+    host_name = site_config.get('hostname', 'default_host_name')
+    return host_name
