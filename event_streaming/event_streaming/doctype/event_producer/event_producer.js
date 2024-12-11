@@ -59,7 +59,10 @@ frappe.ui.form.on('Event Producer Document Type', {
                     
                 }
             }).then(r=>{
-                frappe.msgprint('Syncing started....');
+                frappe.show_alert({
+                    message:__('Syncing has started'),
+                    indicator:'green'
+                }, 5);
                 frm.reload_doc();
                 
             })
