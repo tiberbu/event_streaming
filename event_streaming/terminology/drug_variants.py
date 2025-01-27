@@ -1,5 +1,6 @@
 import frappe
 import json
+from frappe.utils.background_jobs import enqueue
 
 # bench execute  event_streaming.terminology.drug_variants.load_file_data
 def load_file_data():
@@ -14,14 +15,30 @@ def load_file_data():
         # print(d)
     return d
 
-# bench execute  event_streaming.terminology.drug_variants.create_variant_loop
+def chunks(xs, n):
+    n = max(1, n)
+    return (xs[i:i+n] for i in range(0, len(xs), n))
+
+# bench execute  event_streaming.terminology.drug_variants.enqueue_variant_creation
+
 @frappe.whitelist()
-def create_variant_loop():
-    count = 0
+def enqueue_variant_creation():
     message = load_file_data()
+    items = message.get('Data').get('products')
+    chunk_items= chunks(items,100)
+    for i in chunk_items:
+        enqueue(method=create_variant_loop, queue='long', timeout=1600, item_data=i)
+    return 1
+    
+    
+# bench execute  event_streaming.terminology.drug_variants.create_variant_loop
+# @frappe.whitelist()
+def create_variant_loop(item_data):
+    # count = 0
+    # message = load_file_data()
     # print(message)
     errors=[]
-    for item in message.get('Data').get('products'):
+    for item in item_data:#message.get('Data').get('products'):
         product_id = item.get('product_id')
         try:
             if not frappe.db.exists('Item',{'name':product_id}):
@@ -154,6 +171,7 @@ def append_to_brand_name(val):
         itm.attribute_value  = str(val)
         itm.abbr = str(val)
         doc.save()
+        frappe.db.commit()
         
 def append_to_form(val):
     # print(str(val).replace("/",'-'),' ****************************************')
@@ -163,6 +181,7 @@ def append_to_form(val):
         itm.attribute_value  = str(val)
         itm.abbr = str(val)
         doc.save()
+        frappe.db.commit()
         
 def append_drug_route(val):
     if not frappe.db.exists('Item Attribute Value',{'parent': 'Drug Route','attribute_value':str(val)}):
@@ -171,6 +190,7 @@ def append_drug_route(val):
         itm.attribute_value  = str(val)
         itm.abbr = str(val)
         doc.save()
+        frappe.db.commit()
         
 def append_strength(val):
     if not frappe.db.exists('Item Attribute Value',{'parent': 'DRUG STRENGTH','attribute_value':str(val)}):
@@ -179,3 +199,4 @@ def append_strength(val):
         itm.attribute_value  = str(val)
         itm.abbr = str(val)
         doc.save()
+        frappe.db.commit()
