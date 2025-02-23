@@ -40,6 +40,7 @@ def create_variant_loop(item_data):
     errors=[]
     for item in item_data:#message.get('Data').get('products'):
         product_id = item.get('product_id')
+        count = 1
         try:
             if not frappe.db.exists('Item',{'name':product_id}):
                 name = item.get('brand_display_name')
