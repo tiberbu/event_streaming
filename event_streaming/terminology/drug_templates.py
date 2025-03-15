@@ -38,8 +38,12 @@ def parse_message():
             count += 1
         except:
             print('ERROR')
+            create_error_log('err')
         finally:
             continue
+
+def create_error_log(err):
+    pass
 
 def create_terminology_child_table():
     return {}
@@ -48,11 +52,12 @@ def create_terminology_child_table():
 
 def create_template(item_name='',uom=None,component_atc_code=''):
     # frappe.db.sql("delete from tabItem where name=%s",[item_name])
+    # append_active_component(component_atc_code)
     data = {
         "item_code": item_name,
         "item_name": item_name,
         "item_group": "Drug",
-        "stock_uom": uom or "Nos",
+        # "stock_uom": uom or "Nos",
         "custom_is_one_off_drug": 0,
         "disabled": 0,
         "allow_alternative_item": 0,
@@ -64,6 +69,9 @@ def create_template(item_name='',uom=None,component_atc_code=''):
         "has_expiry_date": 0,
         "is_sales_item": 1,
         "doctype": "Item",
+        "has_batch_no": 1,
+        "create_new_batch": 1,
+        "has_expiry_date": 1,
          "attributes": [
             {
                 "attribute": "DRUG STRENGTH",
@@ -96,7 +104,15 @@ def create_template(item_name='',uom=None,component_atc_code=''):
                 "from_range": 0.0,
                 "increment": 0.0,
                 "to_range": 0.0,
-            }
+            },
+            #    {
+            #     "attribute": 'ATC Code',
+            #     "numeric_values": 0,
+            #     "disabled": 1,
+            #     "from_range": 0.0,
+            #     "increment": 0.0,
+            #     "to_range": 0.0,
+            # }
              
             
          ],
@@ -113,3 +129,12 @@ def create_template(item_name='',uom=None,component_atc_code=''):
     # terms
     frappe.db.commit()
     print(doc.name)
+    
+def append_active_component(val):
+    if not frappe.db.exists('Item Attribute Value',{'parent': 'ATC Code','attribute_value':str(val)}):
+        doc = frappe.get_doc('Item Attribute', 'ATC Code')
+        itm = doc.append('item_attribute_values')
+        itm.attribute_value  = str(val)
+        itm.abbr = str(val)
+        doc.save()
+        frappe.db.commit()
