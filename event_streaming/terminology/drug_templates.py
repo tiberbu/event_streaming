@@ -1,5 +1,6 @@
 import frappe
 import json
+from frappe.deferred_insert import deferred_insert as _deferred_insert
 
 def load_file_data():
     file_name = "active_ingredients.json"  # Change this to your file name
@@ -36,14 +37,19 @@ def parse_message():
                     finally:
                         continue
             count += 1
-        except:
-            print('ERROR')
-            create_error_log('err')
+        except Exception as e:
+            exception_message = str(e)
+            create_error_log(exception_message, item['component_description'])
         finally:
             continue
 
-def create_error_log(err):
-    pass
+def create_error_log(err,item):
+    data =  [{
+            "method": 'parse_message for {0}'.format(item),
+            "error": err,
+            # "doctype": "Error Log"
+        }]
+    _deferred_insert("Error Log", data)
 
 def create_terminology_child_table():
     return {}
@@ -124,11 +130,12 @@ def create_template(item_name='',uom=None,component_atc_code=''):
             }
         ]
     }
-    doc = frappe.get_doc(data).insert(ignore_permissions=True)
-    # terms = doc.append('custom_terminology_codes')
-    # terms
-    frappe.db.commit()
-    print(doc.name)
+    if not frappe.db.exists('Item',{'name':item_name}):
+        doc = frappe.get_doc(data).insert(ignore_permissions=True)
+        # terms = doc.append('custom_terminology_codes')
+        # terms
+        frappe.db.commit()
+        print(doc.name)
     
 def append_active_component(val):
     if not frappe.db.exists('Item Attribute Value',{'parent': 'ATC Code','attribute_value':str(val)}):
