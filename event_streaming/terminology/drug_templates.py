@@ -24,13 +24,15 @@ def parse_message():
             name = item['component_description']
             if len(item['component_links']) == 1:
                 atc_code = item['component_links'][0]['component_atc_code']
-                print(name,' ',atc_code,'  ',count)
+                # print(name,' ',atc_code,'  ',count)
                 create_template(name,'Unit',atc_code)
             if len(item['component_links']) > 1:
                 for cp_link in  item['component_links']:
                     try:
-                        atc_code = cp_link['component_atc_code']
-                        print(name,' ',atc_code,'  ',count)
+                        atc_code = cp_link['component_atc_code'] or cp_link['active_component_id']
+                        # print(name,' ',atc_code,'  ',count)
+                        active_component_id = cp_link['active_component_id']
+                        # print(name,' ---->  ',active_component_id)
                         create_template(name,'Unit',atc_code)
                     except:
                         print('err **************************')
@@ -132,8 +134,6 @@ def create_template(item_name='',uom=None,component_atc_code=''):
     }
     if not frappe.db.exists('Item',{'name':item_name}):
         doc = frappe.get_doc(data).insert(ignore_permissions=True)
-        # terms = doc.append('custom_terminology_codes')
-        # terms
         frappe.db.commit()
         print(doc.name)
     
@@ -145,3 +145,53 @@ def append_active_component(val):
         itm.abbr = str(val)
         doc.save()
         frappe.db.commit()
+
+def get_tpl_code(item_name):
+    # "custom_terminology_codes": [
+    #             {
+    #                 "terminology": "ATC Code",
+    #                 "link": "",
+    #                 "code": "85308430",
+    #                 "parent": "mouthwash",
+    #                 "parentfield": "custom_terminology_codes",
+    #                 "parenttype": "Item",
+    #                 "doctype": "Terminology Codes"
+    #             }
+    #         ],
+    return frappe.db.get_value('Terminology Codes',{ "parent": item_name, "parentfield": "custom_terminology_codes","parenttype": "Item"},'code') or item_name
+# bench execute  event_streaming.terminology.drug_templates.return_item_from_uat
+
+@frappe.whitelist(allow_guest=1)
+def return_item_from_uat():
+    items = frappe.db.sql("select name,stock_uom from tabItem where is_stock_item=1 and has_variants=1 and disabled=0 order by rand() limit 2 ",as_dict=1)
+    results = []
+    for item in items:
+        results.append({'code':get_tpl_code(item.name),'item':item.name})
+    return results
+
+# bench execute  event_streaming.terminology.drug_templates.import_item_from_uat
+ 
+@frappe.whitelist()
+def import_item_from_uat():
+    import requests
+    base_url = 'https://mombasa-uat.tiberbu.app/api/method/'
+    # base_url2 = 'https://hmis.tiberbu.app/api/method/'
+    uat_link = '{0}event_streaming.terminology.drug_templates.return_item_from_uat'.format(base_url)
+    try:
+        # print(response.json())
+        response = requests.get(uat_link,headers={})
+        for item in response.json()['message']:
+            try:
+                print(item)
+                create_item_fom_uat(item_name=item['item'],uom=None,component_atc_code=item['code'])
+            except Exception as e:
+                exception_message = str(e)
+                create_error_log(exception_message, item['item'])
+    except Exception as e:
+        exception_message = str(e)
+        create_error_log(exception_message, 'import_item_from_uat')
+
+    
+@frappe.whitelist()
+def create_item_fom_uat(item_name='',uom=None,component_atc_code=''):
+    create_template(item_name,uom,component_atc_code)

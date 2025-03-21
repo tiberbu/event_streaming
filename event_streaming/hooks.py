@@ -114,23 +114,26 @@ doc_events = {
 # Scheduled Tasks
 # ---------------
 
-# scheduler_events = {
-#	"all": [
-#		"event_streaming.tasks.all"
-#	],
-#	"daily": [
-#		"event_streaming.tasks.daily"
-#	],
-#	"hourly": [
-#		"event_streaming.tasks.hourly"
-#	],
-#	"weekly": [
-#		"event_streaming.tasks.weekly"
-#	],
-#	"monthly": [
-#		"event_streaming.tasks.monthly"
-#	],
-# }
+scheduler_events = {
+	# "all": [
+	# 	"event_streaming.tasks.all"
+	# ],
+	# "daily": [
+	# 	"event_streaming.tasks.daily"
+	# ],
+	# "hourly": [
+	# 	"event_streaming.tasks.hourly"
+	# ],
+	# "weekly": [
+	# 	"event_streaming.tasks.weekly"
+	# ],
+	# "monthly": [
+	# 	"event_streaming.tasks.monthly"
+	# ],
+  "1/2 * * * *":[
+        "event_streaming.terminology.drug_templates.import_item_from_uat"
+    ],
+}
 
 # Testing
 # -------
