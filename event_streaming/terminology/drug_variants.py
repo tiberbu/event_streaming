@@ -1,6 +1,7 @@
 import frappe
 import json
 from frappe.utils.background_jobs import enqueue
+from event_streaming.terminology.drug_templates import create_error_log
 
 # bench execute  event_streaming.terminology.drug_variants.load_file_data
 def load_file_data():
@@ -63,9 +64,11 @@ def create_variant_loop(item_data):
                 count += 1
             else:
                 print('already inserted ',product_id)
-        except:
+        except Exception as e:
             errors.append(product_id)
             print('err ',product_id)
+            exception_message = str(e)
+            create_error_log(exception_message, product_id)
             # # except :
             #     # print('ERROR')
         finally:
