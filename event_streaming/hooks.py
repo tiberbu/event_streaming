@@ -130,11 +130,11 @@ scheduler_events = {
 	# "monthly": [
 	# 	"event_streaming.tasks.monthly"
 	# ],
-	"cron": {
-		"1/2 * * * *":[
-			"event_streaming.terminology.drug_templates.import_item_from_uat"
-		],
-	}
+	# "cron": {
+	# 	"1/2 * * * *":[
+	# 		"event_streaming.terminology.drug_templates.import_item_from_uat"
+	# 	],
+	# }
 }
 
 # Testing
