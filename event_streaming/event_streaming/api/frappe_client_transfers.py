@@ -10,9 +10,9 @@ target_client = None
 
 # bench execute event_streaming.event_streaming.api.frappe_client_transfers.execute_doctype_fetch_and_sync Clinical Procedure Template
 @frappe.whitelist()
-def execute_doctype_fetch_and_sync(producer_url='https://master.tiberbu.health',doctype='Item'):
-    # insert_non_existing_records(producer_url,doctype)
-    enqueue(method=insert_non_existing_records, queue='long', timeout=3600, producer_url=producer_url,doctype=doctype)
+def execute_doctype_fetch_and_sync(producer_url='https://master.tiberbu.health',doctype='Clinical Procedure Template'):
+    insert_non_existing_records(producer_url,doctype)
+    # enqueue(method=insert_non_existing_records, queue='long', timeout=3600, producer_url=producer_url,doctype=doctype)
 
 
 # bench execute hmis.hmis.setup.utility_frappe_client.insert_non_existing_records  filters={"creation": [">", '2024-10-30 11:18:43.421245']} filters={'name': ['like', '%physical%']} Health Program Field Mapping
@@ -111,6 +111,27 @@ def insert_non_existing_records(producer_url,doctype="Item"):
                     data['link_existing_item'] = 1
                     parent_data = source_client.get_doc(doctype, document.get("name"))
 
+                    # check if item exists then create it
+                    remote_item = parent_data.get('item')
+                    remote_item_group = parent_data.get('item_group')
+                    
+
+                    if remote_item:
+                        local_item = target_client.get_doc("Item", remote_item)
+                        if local_item:
+                            print(f"Item '{local_item}' exists locally.")
+                        else:
+                            print(f"Item '{remote_item}' DOES NOT exist locally. Creating it...")
+                            target_client.insert({
+                                "doctype": "Item",
+                                "item_code": remote_item,
+                                "item_name": remote_item,
+                                "stock_uom": "Unit",
+                                "item_group": remote_item_group,
+                                "is_stock_item":0,
+                            })
+
+                            
                     # custom_terminology_codes
                     terminology_codes = parent_data.get("custom_terminology_codes", [])
                     formatted_terminology_codes = [
@@ -273,18 +294,20 @@ def get_user_api_key(user):
     user = frappe.get_doc("User", user)
     if not user.api_key or not user.api_secret:
         return {"error": "API key or secret does not exist for this user."}
+    
     return {"api_key": user.api_key, "api_secret": user.get_password('api_secret')}
 
 def get_host_name():
     site_config = frappe.local.conf
     host_name = site_config.get('hostname', 'default_host_name')
+    
     return host_name
 
 
 
 #  bench execute event_streaming.event_streaming.api.frappe_client_transfers.get_sync_status
 @frappe.whitelist()
-def get_sync_status(producer_url='https://mombasa.tiberbu.app',doctype='Item Alternative'):
+def get_sync_status(producer_url='https://hmis.tiberbu.app',doctype='Clinical Procedure Template'):
     filters={}
     if doctype == 'Item Alternative':
         doctype = "Item"
