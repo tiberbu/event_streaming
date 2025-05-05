@@ -11,8 +11,8 @@ target_client = None
 # bench execute event_streaming.event_streaming.api.frappe_client_transfers.execute_doctype_fetch_and_sync Clinical Procedure Template
 @frappe.whitelist()
 def execute_doctype_fetch_and_sync(producer_url='https://master.tiberbu.health',doctype='Clinical Procedure Template'):
-    insert_non_existing_records(producer_url,doctype)
-    # enqueue(method=insert_non_existing_records, queue='long', timeout=3600, producer_url=producer_url,doctype=doctype)
+    # insert_non_existing_records(producer_url,doctype)
+    enqueue(method=insert_non_existing_records, queue='long', timeout=3600, producer_url=producer_url,doctype=doctype)
 
 
 # bench execute hmis.hmis.setup.utility_frappe_client.insert_non_existing_records  filters={"creation": [">", '2024-10-30 11:18:43.421245']} filters={'name': ['like', '%physical%']} Health Program Field Mapping
@@ -294,13 +294,11 @@ def get_user_api_key(user):
     user = frappe.get_doc("User", user)
     if not user.api_key or not user.api_secret:
         return {"error": "API key or secret does not exist for this user."}
-    
     return {"api_key": user.api_key, "api_secret": user.get_password('api_secret')}
 
 def get_host_name():
     site_config = frappe.local.conf
     host_name = site_config.get('hostname', 'default_host_name')
-    
     return host_name
 
 
