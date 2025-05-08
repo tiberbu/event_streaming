@@ -11,8 +11,8 @@ target_client = None
 # bench execute event_streaming.event_streaming.api.frappe_client_transfers.execute_doctype_fetch_and_sync Clinical Procedure Template
 @frappe.whitelist()
 def execute_doctype_fetch_and_sync(producer_url='https://master.tiberbu.health',doctype='Clinical Procedure Template'):
-    # insert_non_existing_records(producer_url,doctype)
-    enqueue(method=insert_non_existing_records, queue='long', timeout=3600, producer_url=producer_url,doctype=doctype)
+    insert_non_existing_records(producer_url,doctype)
+    # enqueue(method=insert_non_existing_records, queue='long', timeout=3600, producer_url=producer_url,doctype=doctype)
 
 
 # bench execute hmis.hmis.setup.utility_frappe_client.insert_non_existing_records  filters={"creation": [">", '2024-10-30 11:18:43.421245']} filters={'name': ['like', '%physical%']} Health Program Field Mapping
@@ -241,6 +241,46 @@ def insert_non_existing_records(producer_url,doctype="Item"):
                         for mech in payment_mechanisms
                     ]
                     data["payment_mechanism"] = formatted_payment_mechanisms
+
+                if doctype == 'Role Profile':
+                    parent_data = source_client.get_doc(doctype, document.get("name"))
+
+                    # roles
+                    roles = parent_data.get("roles", [])
+                    formatted_roles = [
+                        {"role": role.get("role")}
+                        for role in roles
+                    ]
+                    data["roles"] = formatted_roles
+
+                if doctype == 'Workflow':
+                    parent_data = source_client.get_doc(doctype, document.get("name"))
+
+                    # states
+                    states = parent_data.get("states", [])
+                    formatted_states = [
+                        {"allow_edit": state.get("allow_edit"),"avoid_status_override": state.get("avoid_status_override"),
+                         "doc_status": state.get("doc_status"),"docstatus": state.get("docstatus"),
+                         "send_email": state.get("send_email"),"state": state.get("state")}
+                        for state in states
+                    ]
+                    data["states"] = formatted_states
+
+                    # transitions
+                    transitions = parent_data.get("transitions", [])
+                    formatted_transitions = [
+                        {
+                            "action": transition.get("action"),
+                            "allow_self_approval": transition.get("allow_self_approval"),
+                            "allowed": transition.get("allowed"),
+                            "docstatus": transition.get("docstatus"),
+                            "next_state": transition.get("next_state"),
+                            "send_email_to_creator": transition.get("send_email_to_creator"),
+                            "state": transition.get("state"),
+                        }
+                        for transition in transitions
+                    ]
+                    data["transitions"] = formatted_transitions
 
                 
                 print('add to insert')
