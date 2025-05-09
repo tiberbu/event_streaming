@@ -10,7 +10,7 @@ target_client = None
 
 # bench execute event_streaming.event_streaming.api.frappe_client_transfers.execute_doctype_fetch_and_sync Clinical Procedure Template
 @frappe.whitelist()
-def execute_doctype_fetch_and_sync(producer_url='https://master.tiberbu.health',doctype='Clinical Procedure Template'):
+def execute_doctype_fetch_and_sync(producer_url='https://mombasa.tiberbu.app',doctype='Health Program Workflow'):
     # insert_non_existing_records(producer_url,doctype)
     enqueue(method=insert_non_existing_records, queue='long', timeout=3600, producer_url=producer_url,doctype=doctype)
 
@@ -281,6 +281,18 @@ def insert_non_existing_records(producer_url,doctype="Item"):
                         for transition in transitions
                     ]
                     data["transitions"] = formatted_transitions
+                
+                if doctype == 'Health Program Workflow':
+                    parent_data = source_client.get_doc(doctype, document.get("name"))
+
+                    # workflow_state_transitions
+                    transitions = parent_data.get("workflow_state_transitions", [])
+                    formatted_transitions = [
+                        {"entry_point": transition.get("entry_point"),"state": transition.get("state"),
+                        "next_state": transition.get("next_state")}
+                        for transition in transitions
+                    ]
+                    data["workflow_state_transitions"] = formatted_transitions
 
                 
                 print('add to insert')
