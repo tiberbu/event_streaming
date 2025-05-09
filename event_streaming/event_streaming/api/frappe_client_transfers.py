@@ -10,7 +10,7 @@ target_client = None
 
 # bench execute event_streaming.event_streaming.api.frappe_client_transfers.execute_doctype_fetch_and_sync Clinical Procedure Template
 @frappe.whitelist()
-def execute_doctype_fetch_and_sync(producer_url='https://mombasa.tiberbu.app',doctype='Health Program Workflow'):
+def execute_doctype_fetch_and_sync(producer_url='https://master.tiberbu.health',doctype='Clinical Procedure Template'):
     # insert_non_existing_records(producer_url,doctype)
     enqueue(method=insert_non_existing_records, queue='long', timeout=3600, producer_url=producer_url,doctype=doctype)
 
