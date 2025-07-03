@@ -294,7 +294,83 @@ def insert_non_existing_records(producer_url,doctype="Item"):
                     ]
                     data["workflow_state_transitions"] = formatted_transitions
 
-                
+                if doctype == 'Description Reports Mapping':
+                    parent_data = source_client.get_doc(doctype, document.get("name"))
+
+                    # table_multiselect_gavr (ICD11 Multiselect)
+                    icd11_multiselect = parent_data.get("table_multiselect_gavr", [])
+                    formatted_icd11_multiselect = [
+                        {
+                            "icd11_explanation": row.get("icd11_explanation")
+                        }
+                        for row in icd11_multiselect
+                    ]
+
+                    # clinical_procedure_template
+                    clinical_procedures = parent_data.get("clinical_procedure_template", [])
+                    formatted_clinical_procedures = [
+                        {
+                            "clinical_procedure_template": row.get("clinical_procedure_template")
+                        }
+                        for row in clinical_procedures
+                    ]
+
+                    # xray_and_imaging
+                    imaging_procedures = parent_data.get("xray_and_imaging", [])
+                    formatted_imaging_procedures = [
+                        {
+                            "clinical_procedure_template": row.get("clinical_procedure_template")
+                        }
+                        for row in imaging_procedures
+                    ]
+
+                    # table_gtuk (labs)
+                    lab_tests = parent_data.get("table_gtuk", [])
+                    formatted_lab_tests = [
+                        {
+                            "lab_test_template": row.get("lab_test_template")
+                        }
+                        for row in lab_tests
+                    ]
+
+                    # table_itgx (special clinics)
+                    special_clinics = parent_data.get("table_itgx", [])
+                    formatted_special_clinics = [
+                        {
+                            "facility": row.get("facility"),
+                            "service_unit": row.get("service_unit")
+                        }
+                        for row in special_clinics
+                    ]
+
+                    # forms
+                    form_templates = parent_data.get("forms", [])
+                    formatted_form_templates = [
+                        {
+                            "form_dictionary_concept": row.get("form_dictionary_concept")
+                        }
+                        for row in form_templates
+                    ]
+
+                    data["table_multiselect_gavr"] = formatted_icd11_multiselect
+                    data["clinical_procedure_template"] = formatted_clinical_procedures
+                    data["xray_and_imaging"] = formatted_imaging_procedures
+                    data["table_gtuk"] = formatted_lab_tests
+                    data["table_itgx"] = formatted_special_clinics
+                    data["forms"] = formatted_form_templates
+
+                if doctype == 'ICD11 Collection':
+                    parent_data = source_client.get_doc(doctype, document.get("name"))
+
+                    expanded_codes = parent_data.get("expanded_codes", [])
+                    formatted_codes = [
+                        {
+                            "code": row.get("code")
+                        }
+                        for row in expanded_codes
+                    ]
+                    data["expanded_codes"] = formatted_codes
+
                 print('add to insert')
                 docs_to_insert.append(data)
 
