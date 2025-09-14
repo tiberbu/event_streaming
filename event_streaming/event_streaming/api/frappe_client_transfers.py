@@ -10,28 +10,30 @@ target_client = None
 
 # bench execute event_streaming.event_streaming.api.frappe_client_transfers.execute_doctype_fetch_and_sync Clinical Procedure Template
 @frappe.whitelist()
-def execute_doctype_fetch_and_sync(producer_url='https://master.tiberbu.health',doctype='Clinical Procedure Template'):
+def execute_doctype_fetch_and_sync(producer_url='https://master.tiberbu.health',doctype='Lab Test Template'):
     # insert_non_existing_records(producer_url,doctype)
     enqueue(method=insert_non_existing_records, queue='long', timeout=3600, producer_url=producer_url,doctype=doctype)
 
 
 # bench execute hmis.hmis.setup.utility_frappe_client.insert_non_existing_records  filters={"creation": [">", '2024-10-30 11:18:43.421245']} filters={'name': ['like', '%physical%']} Health Program Field Mapping
-def insert_non_existing_records(producer_url,doctype="Item"):
+def insert_non_existing_records(producer_url,doctype="Item Alternative"):
     clients = get_source_and_target_frappe_client_obj(producer_url)
     source_client = clients.get('source_client')
     target_client = clients.get('target_client')
-
     filters={}
     if doctype == 'Item Alternative':
         doctype = "Item"
-        filters = {'has_variants':1,'disabled':0}
+        filters={'has_variants':1,"creation": ["between", ["2024-01-01", "2025-08-30"]]}
+
     elif doctype == 'Item':
-        filters = {'has_variants':0,'disabled':0}
+        filters = {'has_variants':0,"creation": ["between", ["2024-01-01", "2025-08-30"]]}
 
     fields = get_doctype_fields(doctype)
+    
+    target_filters = filters.copy()
+    target_filters.pop("creation", None)
 
-
-    list1 = target_client.get_list(doctype, fields=fields, limit_page_length=50000,filters=filters)
+    list1 = target_client.get_list(doctype, fields=fields, limit_page_length=50000,filters=target_filters)
     list2 = source_client.get_list(doctype, fields=fields, limit_page_length=50000,filters=filters)
     
     
@@ -42,7 +44,8 @@ def insert_non_existing_records(producer_url,doctype="Item"):
     print(len(source_names))
     print(len(target_names))
     print(doctype," Items Missing In Source:",len(items_in_source_not_in_target))
-    # return
+    # print(items_in_source_not_in_target)
+    
     try:
         batch_size = 1
         limit_start = 0
@@ -190,7 +193,7 @@ def insert_non_existing_records(producer_url,doctype="Item"):
                     test_templates = parent_data.get("normal_test_templates", [])
                     formatted_normal_test_templates = [
                         {"lab_test_event": template.get("lab_test_event"),"lab_test_uom": template.get("lab_test_uom"),
-                         "normal_range":template.get("normal_range"), "secondary_uom": template.get("secondary_uom"),
+                         "normal_range":template.get("normal_range"),"custom_dictionary_concept":template.get("custom_dictionary_concept"), "secondary_uom": template.get("secondary_uom"),
                          "allow_blank": template.get("allow_blank"),"conversion_factor": template.get("conversion_factor")}
                         for template in test_templates
                     ]
@@ -214,11 +217,18 @@ def insert_non_existing_records(producer_url,doctype="Item"):
                         for item in c_items
                     ]
 
+                    # custom_results_implications
+                    results_implications = parent_data.get("custom_results_implications", [])
+                    formatted_results_implications = [
+                        {"lab_results_implications": implication.get("lab_results_implications")}
+                        for implication in results_implications]
+
                     data["custom_terminology_codes"] = formatted_terminology_codes
                     data["codification_table"] = formatted_codifications
                     data["normal_test_templates"] = formatted_normal_test_templates
                     data["descriptive_test_templates"] = formatted_descriptive_test_templates
                     data["custom_items"] = formatted_custom_items
+                    data["custom_results_implications"] = formatted_results_implications
 
                 if doctype == 'Item Attribute':
                     parent_data = source_client.get_doc(doctype, document.get("name"))
@@ -388,6 +398,200 @@ def insert_non_existing_records(producer_url,doctype="Item"):
     except Exception as e:
         frappe.throw(f"An error occurred: {e}")
 
+# bench execute event_streaming.event_streaming.api.frappe_client_transfers.update_existing_records
+@frappe.whitelist()
+def update_existing_records(producer_url='https://master.tiberbu.health',doctype='Lab Test Template'):
+    clients = get_source_and_target_frappe_client_obj(producer_url)
+    source_client = clients.get("source_client")
+    target_client = clients.get("target_client")
+
+    # is_procedure_template is_xray_and_imaging 'is_diagnosis':1
+    filters = {}
+
+
+    # filters=[
+	# 			["modified", ">", "2025-07-06 08:56:26.272219"]
+	# 		]
+    if doctype == "Item Alternative":
+        doctype = "Item"
+        filters = {"has_variants": 1, "disabled": 0}
+    elif doctype == "Item":
+        filters = {"has_variants": 0, "disabled": 0}
+
+    fields = get_doctype_fields(doctype)
+
+    source_list = source_client.get_list(doctype, fields=["name"], limit_page_length=50000, filters=filters)
+    target_list = target_client.get_list(doctype, fields=["name"], limit_page_length=50000, filters=filters)
+
+    source_names = {item["name"] for item in source_list}
+    target_names = {item["name"] for item in target_list}
+
+    common_names = source_names & target_names
+    print(f"{len(common_names)} records found in both source and target to update")
+    num=0
+    # return
+    for name in common_names:
+        try:
+            source_doc = source_client.get_doc(doctype, name)
+            update_data = {
+                "doctype": doctype,
+                "name": name,
+            }
+
+            for field in fields:
+                update_data[field] = source_doc.get(field)
+
+
+            if doctype == 'Lab Test Template':
+                parent_data = source_client.get_doc(doctype, name)
+
+                # custom_terminology_codes
+                terminology_codes = parent_data.get("custom_terminology_codes", [])
+                formatted_terminology_codes = [
+                    {"terminology": code.get("terminology"),"link":code.get("link"), "code": code.get("code")}
+                    for code in terminology_codes
+                ]
+
+                # codification_table
+                codifications = parent_data.get("codification_table", [])
+                formatted_codifications = [
+                    {"code": code.get("code"),"code_system":code.get("code_system"), "code_value": code.get("code_value"),
+                        "definition": code.get("definition"),"system": code.get("system"),"oid": code.get("oid")}
+                    for code in codifications
+                ]
+
+                # normal_test_templates
+                test_templates = parent_data.get("normal_test_templates", [])
+                formatted_normal_test_templates = [
+                    {"lab_test_event": template.get("lab_test_event"),"lab_test_uom": template.get("lab_test_uom"),
+                        "normal_range":template.get("normal_range"),"custom_dictionary_concept":template.get("custom_dictionary_concept"),"secondary_uom": template.get("secondary_uom"),
+                        "allow_blank": template.get("allow_blank"),"conversion_factor": template.get("conversion_factor")}
+                    for template in test_templates
+                ]
+
+                # descriptive_test_templates
+                desc_test_templates = parent_data.get("descriptive_test_templates", [])
+                formatted_descriptive_test_templates = [
+                    {"particulars": template.get("particulars"),
+                        "allow_blank": template.get("allow_blank")}
+                    for template in desc_test_templates
+                ]
+
+                # custom_items
+                c_items = parent_data.get("custom_items", [])
+                formatted_custom_items = [
+                    {"actual_qty": item.get("actual_qty"),"barcode": item.get("barcode"),"batch_no": item.get("batch_no"),
+                        "conversion_factor": item.get("conversion_factor"),"invoice_separately_as_consumables": item.get("invoice_separately_as_consumables"),
+                        "item_code": item.get("item_code"),"item_name": item.get("item_name"),
+                        "qty": item.get("qty"),"stock_uom": item.get("stock_uom"),
+                        "transfer_qty": item.get("transfer_qty"),"uom": item.get("uom")}
+                    for item in c_items
+                ]
+
+                # custom_results_implications
+                results_implications = parent_data.get("custom_results_implications", [])
+                formatted_results_implications = [
+                    {"lab_results_implications": implication.get("lab_results_implications")}
+                    for implication in results_implications]
+
+                update_data["custom_terminology_codes"] = formatted_terminology_codes
+                update_data["codification_table"] = formatted_codifications
+                update_data["normal_test_templates"] = formatted_normal_test_templates
+                update_data["descriptive_test_templates"] = formatted_descriptive_test_templates
+                update_data["custom_items"] = formatted_custom_items
+                update_data["custom_results_implications"] = formatted_results_implications
+
+            if doctype == 'ICD11 Collection':
+                parent_data = source_client.get_doc(doctype, name)
+
+                expanded_codes = parent_data.get("expanded_codes", [])
+                formatted_codes = [
+                    {
+                        "code": row.get("code")
+                    }
+                    for row in expanded_codes
+                ]
+                update_data["expanded_codes"] = formatted_codes
+
+            if doctype == 'Description Reports Mapping':
+                parent_data = source_client.get_doc(doctype,name)
+
+                # table_multiselect_gavr (ICD11 Multiselect)
+                icd11_multiselect = parent_data.get("table_multiselect_gavr", [])
+                formatted_icd11_multiselect = [
+                    {
+                        "icd11_explanation": row.get("icd11_explanation")
+                    }
+                    for row in icd11_multiselect
+                ]
+
+                # clinical_procedure_template
+                clinical_procedures = parent_data.get("clinical_procedure_template", [])
+                formatted_clinical_procedures = [
+                    {
+                        "clinical_procedure_template": row.get("clinical_procedure_template")
+                    }
+                    for row in clinical_procedures
+                ]
+
+                # xray_and_imaging
+                imaging_procedures = parent_data.get("xray_and_imaging", [])
+                formatted_imaging_procedures = [
+                    {
+                        "clinical_procedure_template": row.get("clinical_procedure_template")
+                    }
+                    for row in imaging_procedures
+                ]
+
+                # table_gtuk (labs)
+                lab_tests = parent_data.get("table_gtuk", [])
+                formatted_lab_tests = [
+                    {
+                        "lab_test_template": row.get("lab_test_template")
+                    }
+                    for row in lab_tests
+                ]
+
+                # table_itgx (special clinics)
+                special_clinics = parent_data.get("table_itgx", [])
+                formatted_special_clinics = [
+                    {
+                        "facility": row.get("facility"),
+                        "service_unit": row.get("service_unit")
+                    }
+                    for row in special_clinics
+                ]
+
+                # forms
+                form_templates = parent_data.get("forms", [])
+                formatted_form_templates = [
+                    {
+                        "form_dictionary_concept": row.get("form_dictionary_concept")
+                    }
+                    for row in form_templates
+                ]
+
+                update_data["table_multiselect_gavr"] = formatted_icd11_multiselect
+                update_data["clinical_procedure_template"] = formatted_clinical_procedures
+                update_data["xray_and_imaging"] = formatted_imaging_procedures
+                update_data["table_gtuk"] = formatted_lab_tests
+                update_data["table_itgx"] = formatted_special_clinics
+                update_data["forms"] = formatted_form_templates
+
+            # Perform the update
+            clean_data = clean_update_data(update_data)
+            target_client.update(clean_data)
+            print(f"{num} Updated {name} successfully")
+            num+=1
+
+        except Exception as e:
+            print(f"Failed to update {name}: {e}")
+
+def clean_update_data(update_data):
+    # Remove fields that cannot be updated
+    for field in ["creation", "created_on", "created_by", "modified", "modified_by", "owner"]:
+        update_data.pop(field, None)
+    return update_data
 
 
 # bench execute event_streaming.event_streaming.api.frappe_client_transfers.get_doctype_fields
@@ -422,11 +626,13 @@ def get_user_api_key(user):
     user = frappe.get_doc("User", user)
     if not user.api_key or not user.api_secret:
         return {"error": "API key or secret does not exist for this user."}
+    # return {"api_key": "", "api_secret": ""}
     return {"api_key": user.api_key, "api_secret": user.get_password('api_secret')}
 
 def get_host_name():
     site_config = frappe.local.conf
     host_name = site_config.get('hostname', 'default_host_name')
+    # return ""
     return host_name
 
 
@@ -435,18 +641,30 @@ def get_host_name():
 @frappe.whitelist()
 def get_sync_status(producer_url='https://hmis.tiberbu.app',doctype='Clinical Procedure Template'):
     filters={}
+    # if doctype == 'Item Alternative':
+    #     doctype = "Item"
+    #     filters = {'has_variants':1,'disabled':0}
+    # elif doctype == 'Item':
+    #     filters = {'has_variants':0,'disabled':0}
+        
     if doctype == 'Item Alternative':
         doctype = "Item"
-        filters = {'has_variants':1,'disabled':0}
+        filters={'has_variants':1,"creation": ["between", ["2024-01-01", "2025-08-30"]]}
+
     elif doctype == 'Item':
-        filters = {'has_variants':0,'disabled':0}
+        filters = {'has_variants':0,"creation": ["between", ["2024-01-01", "2025-08-30"]]}
+
+    
+    target_filters = filters.copy()
+    target_filters.pop("creation", None)
 
     clients = get_source_and_target_frappe_client_obj(producer_url)
     source_client = clients.get('source_client')
     target_client = clients.get('target_client')
 
     source_count = len(source_client.get_list(doctype, fields=["name"],filters=filters,limit_page_length=50000))
-    target_count = len(target_client.get_list(doctype, fields=["name"],filters=filters,limit_page_length=50000))
+    target_count = len(target_client.get_list(doctype, fields=["name"],filters=target_filters,limit_page_length=50000))
+    print(source_count,target_count)
     percentage = (target_count / source_count * 100) if source_count != 0 else 0
 
     return {'current':target_count,'master':source_count,'percentage':percentage}
