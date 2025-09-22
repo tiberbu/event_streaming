@@ -35,7 +35,21 @@ def run_instance_setup():
             add_progress_comment(f"Syncing {doctype} from Master", f"Syncing {doctype} from Master is at {round(status,0)} percent")
             execute_doctype_fetch_and_sync(master_url, doctype)
             break
-        
+
+# bench execute event_streaming.event_streaming.crons.setup.regularly_sync_essential_doctypes
+def regularly_sync_essential_doctypes():
+    master_url = "https://master.tiberbu.health"
+    doctypes =['SHA Intervention','Concept FormKey Controls','ICD11 Collection','Dictionary Concept','Health Program','Health Program Workflow',
+               'Health Program Field Mapping','Workflow','Description Reports Mapping']
+    for doctype in doctypes:
+        status = get_sync_status(master_url, doctype).get('percentage', 0)
+        print(f"Sync status for {doctype}: {status}%")
+        if status < 100:
+            print("run the sync for", doctype)
+            add_progress_comment(f"Syncing {doctype} from Master", f"Syncing {doctype} from Master is at {round(status,0)} percent")
+            execute_doctype_fetch_and_sync(master_url, doctype)
+    
+
 def add_progress_comment(subject,text):
 	doc = frappe.new_doc("Comment")
 	doc.comment_type = "Comment"

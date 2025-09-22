@@ -134,6 +134,9 @@ scheduler_events = {
 		"*/3 * * * *":[
 			"event_streaming.event_streaming.crons.setup.run_instance_setup"
 		],
+		"0 * * * *":[
+			"event_streaming.event_streaming.crons.setup.regularly_sync_essential_doctypes"
+		],
 	}
 }
 
