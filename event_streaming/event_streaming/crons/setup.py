@@ -39,8 +39,8 @@ def run_instance_setup():
 # bench execute event_streaming.event_streaming.crons.setup.regularly_sync_essential_doctypes
 def regularly_sync_essential_doctypes():
     master_url = "https://master.tiberbu.health"
-    doctypes =['SHA Intervention','Concept FormKey Controls','ICD11 Collection','Dictionary Concept','Health Program','Health Program Workflow',
-               'Health Program Field Mapping','Workflow','Description Reports Mapping']
+    doctypes =['Concept FormKey Controls','ICD11 Collection','Dictionary Concept','Health Program','Health Program Workflow',
+               'Health Program Field Mapping','Workflow']
     for doctype in doctypes:
         status = get_sync_status(master_url, doctype).get('percentage', 0)
         print(f"Sync status for {doctype}: {status}%")

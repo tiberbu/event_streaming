@@ -99,6 +99,24 @@ frappe.ui.form.on('Event Producer Document Type', {
                 doctype: row.ref_doctype
             }
         });
+    },
+    update_from_master(frm, cdt, cdn) {
+        let row = frappe.get_doc(cdt, cdn);
+
+        // Show initial alert
+        frappe.show_alert({
+            message: __('Updating has started...'),
+            indicator: 'green'
+        }, 5);
+
+        // **Then** trigger the actual update request
+        frappe.call({
+            method: "event_streaming.event_streaming.api.frappe_client_transfers.update_existing_records",
+            args: {
+                producer_url: row.parent,
+                doctype: row.ref_doctype
+            }
+        });
     }
 });
 
