@@ -23,10 +23,13 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
     filters={}
     if doctype == 'Item Alternative':
         doctype = "Item"
-        filters={'has_variants':1,"creation": ["between", ["2024-01-01", "2025-08-30"]]}
+        # filters={'has_variants':1,"creation": ["between", ["2024-01-01", "2025-08-30"]]}
+        filters={'has_variants':1,'custom_is_ppb_drug': 1}
+
 
     elif doctype == 'Item':
-        filters = {'has_variants':0,"creation": ["between", ["2024-01-01", "2025-08-30"]]}
+        # filters = {'has_variants':0,"creation": ["between", ["2024-01-01", "2025-08-30"]]}
+        filters={'has_variants':0,'custom_is_ppb_drug': 1}
 
     fields = get_doctype_fields(doctype)
     
@@ -649,10 +652,12 @@ def get_sync_status(producer_url='https://hmis.tiberbu.app',doctype='Clinical Pr
         
     if doctype == 'Item Alternative':
         doctype = "Item"
-        filters={'has_variants':1,"creation": ["between", ["2024-01-01", "2025-08-30"]]}
+        # filters={'has_variants':1,"creation": ["between", ["2024-01-01", "2025-08-30"]]}
+        filters={'has_variants':1,'custom_is_ppb_drug': 1}
 
     elif doctype == 'Item':
-        filters = {'has_variants':0,"creation": ["between", ["2024-01-01", "2025-08-30"]]}
+        # filters = {'has_variants':0,"creation": ["between", ["2024-01-01", "2025-08-30"]]}
+        filters={'has_variants':0,'custom_is_ppb_drug': 1}
 
     
     target_filters = filters.copy()
