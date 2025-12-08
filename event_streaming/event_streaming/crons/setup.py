@@ -5,7 +5,7 @@ from frappe.installer import update_site_config
 from ..api.frappe_client_transfers import get_sync_status,execute_doctype_fetch_and_sync, get_source_and_target_frappe_client_obj
 # bench execute event_streaming.event_streaming.crons.setup.run_instance_setup
 def run_instance_setup():
-    doctypes =['Queue State Status','Item Group','UOM','SHA Intervention','Item Attribute','Item Alternative','Item','Healthcare Service Unit Type','Medical Department',
+    doctypes =['Queue State Status','Item Group','UOM','SHA Intervention','Item Attribute','Item Alternative','Item','Labs And Procedures Items','Healthcare Service Unit Type','Medical Department','SHA Benefit Package',
                'Clinical Procedure Template','Lab Test UOM','Concept FormKey Controls','Dictionary Concept','Lab Results Implications','Lab Test Template','Prescription Dosage','Dosage Form',
                'Health Program','Health Program Workflow','Health Program Field Mapping','Workflow','Signs And Symptoms',
                'ICD11 Collection','Description Reports Mapping']
@@ -39,7 +39,7 @@ def run_instance_setup():
 # bench execute event_streaming.event_streaming.crons.setup.regularly_sync_essential_doctypes
 def regularly_sync_essential_doctypes():
     master_url = "https://master.tiberbu.health"
-    doctypes =['Concept FormKey Controls','ICD11 Collection','Dictionary Concept','Health Program','Health Program Workflow',
+    doctypes =['Item Group','Concept FormKey Controls','ICD11 Collection','Dictionary Concept','Health Program','Health Program Workflow',
                'Health Program Field Mapping','Workflow']
     for doctype in doctypes:
         status = get_sync_status(master_url, doctype).get('percentage', 0)
@@ -72,10 +72,35 @@ def create_missing_item_groups():
             item_group.parent_item_group = "Biochemistry" if ig=='Renal Function Tests(Electrolytes)' else "All Item Groups"
             item_group.is_group = 1 if ig == 'All Drugs' else 0
             item_group.insert()
+            frappe.db.commit()
             print(f"Created missing Item Group: {ig}")
         else:
             print(f"Item Group {ig} already exists.")
             
+    # Create SHA Customer if missing
+    if not frappe.db.exists("Customer", {"customer_name": "Social Health Authority"}):
+        customer = frappe.new_doc("Customer")
+        customer.customer_name = "Social Health Authority"
+        customer.customer_type = "Company"
+        customer.insert()
+        frappe.db.commit()
+        print("Created Customer: Social Health Authority")
+    else:
+        print("Customer 'Social Health Authority' already exists.")
+    
+    # Create SHA Customer Group if missing
+    if not frappe.db.exists("Customer Group", {"customer_group_name": "Social Health Authority"}):
+        customer_group = frappe.new_doc("Customer Group")
+        customer_group.customer_group_name = "Social Health Authority"
+        customer_group.parent_customer_group = "Commercial"
+        customer_group.is_health_scheme = 1
+        customer_group.default_price_list = "Standard Selling"
+        customer_group.default_customer = "Social Health Authority"
+        customer_group.insert()
+        frappe.db.commit()
+        print("Created Customer Group: Social Health Authority")
+    else:
+        print("Customer Group 'Social Health Authority' already exists.")
 
 
 # bench execute event_streaming.event_streaming.crons.setup.create_missing_item_groups_remotely
@@ -145,5 +170,22 @@ def sync_frequent_updated_doctypes():
 def post_new_additions_to_master():
     master_url = "https://master.tiberbu.health"
     doctype=['Signs And Symptoms']
-    # use after insert?
-    
+
+# bench execute event_streaming.event_streaming.crons.setup.set_item_allow_rename_attribute
+def set_item_allow_rename_attribute():
+    doc = frappe.get_single("Item Variant Settings")
+    doc.allow_rename_attribute_value = 1
+    doc.save()
+    frappe.db.commit()
+
+# bench execute event_streaming.event_streaming.crons.setup.set_item_allow_rename_attribute_remotely
+def set_item_allow_rename_attribute_remotely(producer_url='https://master.tiberbu.health'):
+    target_client = get_source_and_target_frappe_client_obj(producer_url)["target_client"]
+    try:
+        item_variant_settings = target_client.get_doc("Item Variant Settings", "Item Variant Settings")
+        item_variant_settings["allow_rename_attribute_value"] = 1
+        target_client.update(item_variant_settings)
+        print("Successfully enabled 'Allow Rename Attribute Value' on remote site.")
+    except Exception as e:
+        print("Failed to update remote Item Variant Settings:", e)
+        

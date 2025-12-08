@@ -6,6 +6,7 @@
  "engine": "InnoDB",
  "field_order": [
   "ref_doctype",
+  "description",
   "status",
   "use_same_name",
   "sync_from_master",
@@ -107,12 +108,19 @@
    "fieldtype": "Button",
    "in_list_view": 1,
    "label": "Update From Master"
+  },
+  {
+   "columns": 1,
+   "fieldname": "description",
+   "fieldtype": "Select",
+   "label": "Description",
+   "options": "Drugs Templates\nDrugs Variants\nLabs And Procedures Items"
   }
  ],
  "grid_page_length": 50,
  "istable": 1,
  "links": [],
- "modified": "2025-09-24 12:55:49.348474",
+ "modified": "2025-12-02 13:52:15.660484",
  "modified_by": "Administrator",
  "module": "Event Streaming",
  "name": "Event Producer Document Type",

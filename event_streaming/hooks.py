@@ -108,7 +108,10 @@ doc_events = {
         "on_update": "event_streaming.event_streaming.doctype.event_update_log.event_update_log.notify_consumers",
         "on_cancel": "event_streaming.event_streaming.doctype.event_update_log.event_update_log.notify_consumers",
         "on_trash": "event_streaming.event_streaming.doctype.event_update_log.event_update_log.notify_consumers"
-    }
+    },
+	"Event Producer": {
+        "after_insert":["event_streaming.event_streaming.hooks.setup_hooks.on_event_producer_creation"]
+    },
 }
 
 # Scheduled Tasks
