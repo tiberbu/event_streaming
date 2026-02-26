@@ -14,7 +14,7 @@ target_client = None
 
 # bench execute event_streaming.event_streaming.api.frappe_client_transfers.execute_doctype_fetch_and_sync Clinical Procedure Template
 @frappe.whitelist()
-def execute_doctype_fetch_and_sync(producer_url='https://master.tiberbu.health',doctype='Item'):
+def execute_doctype_fetch_and_sync(producer_url='https://master.tiberbu.health',doctype='Item Group'):
     # insert_non_existing_records(producer_url,doctype)
     enqueue(method=insert_non_existing_records, queue='long', timeout=3600, producer_url=producer_url,doctype=doctype)
 
@@ -40,7 +40,10 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
         filters = {"is_stock_item": 0,"disabled":0}
 
     fields = get_doctype_fields(doctype)
-    
+    # print(fields)
+    if 'custom_benefits_exchange_code' in fields:
+        fields.remove('custom_benefits_exchange_code')
+
     target_filters = filters.copy()
     target_filters.pop("creation", None)
 
@@ -87,7 +90,7 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
                     data[field] = document.get(field)
                 # add attribute child table to item
                 if doctype == 'Item':
-                    if item_name in ['Aceclofenac/Paracetamol/']:
+                    if item_name in ['IBUPROFEN','Ibuprofen SUSPENSION-60ml','Aceclofenac/Paracetamol/','ALBENDAZOLE','METRONIDAZOLE','ATORVASTATIN CALCIUM','CHLORAMPHENICOL']:
                         print(f"Skipping problematic Item: {item_name}")
                         continue
                     
@@ -128,6 +131,9 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
                     data["attributes"] = formatted_attributes
                     data["uoms"] = formatted_uoms
                     data["custom_terminology_codes"] = formatted_terminology_codes
+                    # data.pop('custom_benefits_exchange_code')
+                    # del data['custom_benefits_exchange_code']
+
                     
 
                 # add terminology codes childtable
@@ -151,7 +157,7 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
                                 "item_code": remote_item,
                                 "item_name": remote_item,
                                 "stock_uom": "Unit",
-                                "item_group": remote_item_group,
+                                "item_group": 'Services',
                                 "is_stock_item":0,
                             })
 
@@ -194,6 +200,26 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
                 if doctype == 'Lab Test Template':
                     data['link_existing_item'] = 1
                     parent_data = source_client.get_doc(doctype, document.get("name"))
+                    
+                    # check if item exists then create it
+                    remote_item = parent_data.get('item')
+                    remote_item_group = parent_data.get('item_group')
+                    
+
+                    if remote_item:
+                        local_item = target_client.get_doc("Item", remote_item)
+                        if local_item:
+                            print(f"Item '{local_item}' exists locally.")
+                        else:
+                            print(f"Item '{remote_item}' DOES NOT exist locally. Creating it...")
+                            target_client.insert({
+                                "doctype": "Item",
+                                "item_code": remote_item,
+                                "item_name": remote_item,
+                                "stock_uom": "Unit",
+                                "item_group": 'Services',
+                                "is_stock_item":0,
+                            })
 
                     # custom_terminology_codes
                     terminology_codes = parent_data.get("custom_terminology_codes", [])
@@ -396,7 +422,8 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
                     expanded_codes = parent_data.get("expanded_codes", [])
                     formatted_codes = [
                         {
-                            "code": row.get("code")
+                            "code": row.get("code"),
+                            "description": row.get("description")
                         }
                         for row in expanded_codes
                     ]
@@ -484,6 +511,22 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
 
     common_names = source_names & target_names
     print(f"{len(common_names)} records found in both source and target to update")
+    
+    total = len(common_names)
+
+    progress = frappe.get_doc({
+        "doctype": "Data Sync Progress",
+        "document_type": doctype,
+        "total_records": total,
+        "processed": 0,
+        "success": 0,
+        "failed": 0,
+        "status": "Running",
+        "synced_at":None
+    })
+    progress.insert(ignore_permissions=True)
+    frappe.db.commit()
+    
     num=0
     # return
     for name in common_names:
@@ -662,9 +705,23 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
             target_client.update(clean_data)
             print(f"{num} Updated {name} successfully")
             num+=1
+            
+            progress.success += 1
 
         except Exception as e:
-            print(f"Failed to update {name}: {e}")
+            frappe.log_error(f"Failed to update {name}: {e}", "Update Failure")
+
+            progress.failed += 1
+        
+        finally:
+            progress.processed += 1
+            progress.save(ignore_permissions=True)
+            frappe.db.commit()
+            
+    progress.synced_at = frappe.utils.now()
+    progress.status = "Completed"
+    progress.save(ignore_permissions=True)
+    frappe.db.commit()
 
 def clean_update_data(update_data):
     # Remove fields that cannot be updated
@@ -709,13 +766,13 @@ def get_user_api_key(user):
 
 def get_host_name():
     site_config = frappe.local.conf
-    host_name = site_config.get('hostname', 'default_host_name')
+    host_name = site_config.get('hostname', 'default_host_name')    
     return host_name
 
 
 #  bench execute event_streaming.event_streaming.api.frappe_client_transfers.get_sync_status
 @frappe.whitelist()
-def get_sync_status(producer_url='https://hmis.tiberbu.app',doctype='Clinical Procedure Template'):
+def old_get_sync_status(producer_url='https://master.tiberbu.health',doctype='Queue State Status'):
     filters={}
     
         
@@ -746,341 +803,92 @@ def get_sync_status(producer_url='https://hmis.tiberbu.app',doctype='Clinical Pr
     return {'current':target_count,'master':source_count,'percentage':percentage}
 
 
-# 'Item Attribute',
-# 'Medical Department',
-# 'Item Group',
-# 'Prescription Dosage',
-# 'Dosage Form',
-# 'Client Script',
-# 'Lab Test UOM',
-# 'Concept FormKey Controls',
-# 'Dictionary Concept',
-# 'Health Program Field Mapping',
-# 'Lab Test Template',
-# 'Clinical Procedure Template',
+@frappe.whitelist()
+def get_sync_status(producer_url='https://master.tiberbu.health', doctype='Queue State Status'):
+    # Define filters for specific doctypes
+    filters = {}
+    if doctype == 'Item Alternative':
+        doctype_query = "Item"
+        filters = {"is_stock_item": 1, "has_variants": 1, "custom_is_ppb_drug": 1, "disabled": 0}
+    elif doctype == 'Item':
+        doctype_query = "Item"
+        filters = {"is_stock_item": 1, "has_variants": 0, "custom_is_ppb_drug": 1, "disabled": 0}
+    elif doctype == 'Labs And Procedures Items':
+        doctype_query = "Item"
+        filters = {"is_stock_item": 0, "disabled": 0}
+    else:
+        doctype_query = doctype
 
+    # Copy filters for target, removing "creation" if exists
+    target_filters = filters.copy()
+    target_filters.pop("creation", None)
 
+    # ----------------------------
+    # Get latest Data Sync Progress
+    # ----------------------------
+    progress_list = frappe.get_all(
+        "Data Sync Progress",
+        filters={"document_type": doctype},
+        order_by="creation desc",
+        limit_page_length=1
+    )
 
-def compare_doctype_fields():
-    doctype = 'Clinical Procedure Template'
-    producer_url = "https://mombasa.tiberbu.app"
+    if progress_list:
+        progress_doc = frappe.get_doc("Data Sync Progress", progress_list[0].name)
+        total = int(progress_doc.total_records or 0)
+        processed = int(progress_doc.processed or 0)
+        success = int(progress_doc.success or 0)
+        failed = int(progress_doc.failed or 0)
+        status = progress_doc.status
+        synced_at = progress_doc.synced_at
+        percentage_progress = (processed / total * 100) if total else 0
+    else:
+        total = processed = success = failed = 0
+        status = "Not started"
+        synced_at = None
+        percentage_progress = 0
 
+    # ----------------------------
+    # Get live counts from source/target
+    # ----------------------------
     clients = get_source_and_target_frappe_client_obj(producer_url)
     source_client = clients.get('source_client')
     target_client = clients.get('target_client')
 
-    # Fetch fields from source and target
-    source_fields = get_fields(source_client, doctype)
-    target_fields = get_fields(target_client, doctype)
+    source_count = len(source_client.get_list(
+        doctype_query,
+        fields=["name"],
+        filters=filters,
+        limit_page_length=50000
+    ))
 
-    # Convert to sets for easier comparison
-    source_fields_set = set(source_fields)
-    target_fields_set = set(target_fields)
+    target_count = len(target_client.get_list(
+        doctype_query,
+        fields=["name"],
+        filters=target_filters,
+        limit_page_length=50000
+    ))
 
-    # Find differences
-    fields_only_in_source = source_fields_set - target_fields_set
-    fields_only_in_target = target_fields_set - source_fields_set
-    fields_in_both = source_fields_set & target_fields_set
+    percentage = (target_count / source_count * 100) if source_count != 0 else 0
 
-    # Print them
-    print(f"\n🔎 Comparison for Doctype: {doctype}")
-    print(f"🌍 Source ({source_client.url}):")
-    print(f"Fields: {sorted(source_fields)}\n")
 
-    print(f"🏠 Target ({target_client.url}):")
-    print(f"Fields: {sorted(target_fields)}\n")
-
-    print(f"✅ Common Fields ({len(fields_in_both)}): {sorted(fields_in_both)}\n")
-    print(f"❗ Fields only in Source ({len(fields_only_in_source)}): {sorted(fields_only_in_source)}\n")
-    print(f"❗ Fields only in Target ({len(fields_only_in_target)}): {sorted(fields_only_in_target)}\n")
-
+    # ----------------------------
+    # Combine results
+    # ----------------------------
     return {
-        "only_in_source": fields_only_in_source,
-        "only_in_target": fields_only_in_target,
-        "common_fields": fields_in_both
+            "current": target_count,
+            "master": source_count,
+            "percentage": percentage,
+            "percentage_progress":percentage_progress,
+            "success": success,
+            "failed": failed,
+            "status": status,
+            "synced_at": synced_at  
     }
+
 
 def get_fields(client, doctype):
     meta = client.get_doc("DocType", doctype)
     fields = [d.get('fieldname') for d in meta.get('fields') if d.get('fieldname')]
     fields.append('name')  # Always add 'name' because it's a primary field
     return fields
-
-
-# bench execute event_streaming.event_streaming.api.frappe_client_transfers.get_item_variant_attributes
-def get_item_variant_attributes():
-    doctype = 'Item Variant Attribute'
-    producer_url = "https://mombasa.tiberbu.app"
-
-    clients = get_source_and_target_frappe_client_obj(producer_url)
-    source_client = clients.get('source_client')
-    target_client = clients.get('target_client')
-    
-    data = target_client.get_list(doctype, fields=['attribute','attribute_value'], limit_page_length=5,filters={'attribute':'Unique Code'})
-    print(data)
-    
-#  bench execute event_streaming.event_streaming.api.frappe_client_transfers.delete_items_by_group
-def delete_items_by_group():
-    clients = get_source_and_target_frappe_client_obj("https://master.tiberbu.health")
-    client = clients.get("target_client")
-    groups = [
-        "Ace Inhibitors, Combinations",
-        "Ace Inhibitors, Plain",
-        "Adrenergics For Systemic Use",
-        "Adrenergics, Inhalants",
-        "Agents Against Amoebiasis And Other Protozoal Diseases",
-        "Agents Against Leishmaniasis And Trypanosomiasis",
-        "Agents For Treatment Of Hemorrhoids And Anal Fissures For Topical Use",
-        "Aldosterone Antagonists And Other Potassium-Sparing Agents",
-        "Alkylating Agents",
-        "All Other Non-Therapeutic Products",
-        "All Other Therapeutic Products",
-        "ALPHA-ADRENOCEPTOR BLOCKING DRUGS",
-        "Aminoglycoside Antibacterials",
-        "Amphenicols",
-        "Anabolic Steroids",
-        "ANALGESIC/ANTIPYRETIC",
-        "ANALGESICS/ DRUGS USED IN RHEUMATIC DISEASES AND GOUT",
-        "Androgens",
-        "Anesthetics, General",
-        "Anesthetics, Local",
-        "Angiotensin Ii Receptor Blockers (Arbs), Combinations",
-        "Angiotensin Ii Receptor Blockers (Arbs), Plain",
-        "Angitotensin Ii Receptor Blockers (Arbs), Plain",
-        "Antacids",
-        "Anti-Acne Preparations For Systemic Use",
-        "Anti-Acne Preparations For Topical Use",
-        "Anti-Dementia Drugs",
-        "Anti-Inflammatory And Antirheumatic Products, Non-Steroids",
-        "Anti-Parathyroid Agents",
-        "Antiadrenergic Agents, Centrally Acting",
-        "ANTIANGINAL DRUGS",
-        "Antiarrhythmics, Class I And Iii",
-        "Antibiotics For Topical Use",
-        "Anticholinergic Agents",
-        "Antidiarrheal Microorganisms",
-        "Antiemetics And Antinauseants",
-        "Antifibrinolytics",
-        "Antifungals For Systemic Use",
-        "Antifungals For Topical Use",
-        "Antiglaucoma Preparations And Miotics",
-        "Antigout Preparations",
-        "Antihistamines For Systemic Use",
-        "Antiinfectives",
-        "Antiinfectives And Antiseptics, Excl. Combinations With Corticosteroids",
-        "Antiinfectives/Antiseptics In Combination With Corticosteroids",
-        "Antiinflammatory Agents",
-        "Antiinflammatory Agents And Antiinfectives In Combination",
-        "Antiinflammatory And Antirheumatic Products, Non-Steroids",
-        "Antiinflammatory/Antirheumatic Agents In Combination",
-        "Antimalarials",
-        "Antimetabolites",
-        "Antimigraine Preparations",
-        "Antimycotics For Systemic Use",
-        "Antinematodal Agents",
-        "Antiobesity Preparations, Excl. Diet Products",
-        "ANTIPLATELET DRUGS",
-        "Antipropulsives",
-        "Antipruritics, Incl. Antihistamines, Anesthetics, Etc.",
-        "Antipsoriatics For Systemic Use",
-        "Antipsoriatics For Topical Use",
-        "Antipsychotics",
-        "Antiseptics And Disinfectants",
-        "Antispasmodics In Combination With Analgesics",
-        "Antispasmodics In Combination With Psycholeptics",
-        "Antithrombotic Agents",
-        "Antitrematodals",
-        "Antivaricose Therapy",
-        "Antivertigo Preparations",
-        "Anxiolytics",
-        "Appetite Stimulants",
-        "Arteriolar Smooth Muscle, Agents Acting On",
-        "Ascorbic Acid (Vitamin C), Incl. Combinations"]
-    groups2 = [ 
-        "Bacterial And Viral Vaccines, Combined",
-        "Bacterial Vaccines",
-        "Belladonna And Derivatives, Plain",
-        "Beta Blocking Agents",
-        "Beta Blocking Agents And Other Diuretics",
-        "Beta Blocking Agents And Thiazides",
-        "Beta Blocking Agents, Other Combinations",
-        "BETA-ADRENOCEPTOR BLOCKING DRUGS",
-        "Beta-Lactam Antibacterials, Penicillins",
-        "Bile Therapy",
-        "Blood And Related Products",
-        "Blood Glucose Lowering Drugs, Excl. Insulins",
-        "Calcium",
-        "Calcium Channel Blockers And Diuretics",
-        "Capillary Stabilizing Agents",
-        "Cardiac Glycosides",
-        "Chemotherapeutics For Topical Use",
-        "Cicatrizants",
-        "Combinations Of Antibacterials",
-        "Contraceptives For Topical Use",
-        "Corticosteroids",
-        "Corticosteroids And Antiinfectives In Combination",
-        "Corticosteroids For Systemic Use, Plain",
-        "Corticosteroids, Combinations With Antibiotics",
-        "Corticosteroids, Combinations With Antiseptics",
-        "Corticosteroids, Other Combinations",
-        "Corticosteroids, Plain",
-        "Cough And Cold Preparations",
-        "Cough Suppressants And Expectorants, Combinations",
-        "Cough Suppressants, Excl. Combinations With Expectorants",
-        "Cytotoxic Antibiotics And Related Substances",
-        "Decongestants And Antiallergics",
-        "Decongestants And Other Nasal Preparations For Topical Use",
-        "Diagnostic Agents",
-        "Digestives, Incl. Enzymes",
-        "Direct Acting Antivirals",
-        "Diuretics And Potassium-Sparing Agents In Combination",
-        "Dopaminergic Agents",
-        "Drenergics, Inhalants",
-        "Drugs Affecting Bone Structure And Mineralization",
-        "DRUGS ALL GROUPS,",
-        "Drugs For Constipation",
-        "DRUGS FOR ERECTILE DYSFUNCTION",
-        "Drugs For Functional Gastrointestinal Disorders",
-        "Drugs For Peptic Ulcer And Gastro-Oesophageal Reflux Disease (Gord)",
-        "Drugs For Peptic Ulcer And Gastro-Oesphageal Reflux Diseas (Gord)",
-        "DRUGS FOR THE RELIEF OF SOFT TISSUE INFLAMMATION",
-        "Drugs For Treatment Of Lepra",
-        "Drugs For Treatment Of Tuberculosis",
-        "Drugs Used In Benign Prostatic Hypertrophy",
-        "DRUGS USED IN NAUSEA AND VERTIGO",
-        "DRUGS USED IN NEUROMUSCULAR DISORDERS",
-        "DRUGS USED IN RHEUMATIC DISEASES AND GOUT - NSAID",
-        "Ectoparasiticides, Incl. Scabicides",
-        "Electrolytes With Carbohydrates",
-        "Emollients And Protectives",
-        "Enzymes",
-        "Estrogens",
-        "Expectorants, Excl. Combinations With Cough Suppressants",
-        "Gonadotropins And Other Ovulation Stimulants",
-        "Herbal",
-        "High-Ceiling Diuretics",
-        "Hormonal Contraceptives For Systemic Use",
-        "Hormone Antagonists And Related Agents",
-        "Hormones And Related Agents",
-        "Hypnotics And Sedatives",
-        "Hypothalamic Hormones",
-        "I.V. Solution Additives",
-        "I.V. Solutions",
-        "Immune Sera",
-        "Immunoglobulins",
-        "Immunostimulants",
-        "Immunosuppressants",
-        "Insulin And Analogues",
-        "Insulins And Analogues",
-        "Intestinal Adsorbents",
-        "Intestinal Antiinf+X279Ectives",
-        "Intestinal Antiinfectives",
-        "Iron Preparations",
-        "Irrigating Solutions",
-        "Lipid Modifying Agents, Combinations",
-        "Lipid Modifying Agents, Plain",
-        "LIPID-REGULATING DRUGS",
-        "Liver Therapy, Lipotropics",
-        "Low-Ceiling Diuretics, Excl, Thiazides",
-        "Low-Ceiling Diuretics, Thiazides",
-        "Macrolides, Lincosamides And Streptogramins",
-        "Magnetic Resonance Imaging Contrast Media",
-        "Medicated Dressings",
-        "Monoclonal Antibodies And Antibody Drug Conjugates",
-        "Multivitamins, Combinations",
-        "Multivitamins, Plain",
-        "Muscle Relaxants, Centrally Acting Agents",
-        "Muscle Relaxants, Peripherally Acting Agents",
-        "Mydriatics And Cycloplegics",
-        "Nasal Decongestants For Systemic Use",
-        "None",
-        "NUTRITION",
-        "Ocular Vascular Disorder Agents",
-        "Opioids",
-        "Orticosteroids For Systemic Use, Plain",
-        "Other Alimentary Tract And Metabolism Products",
-        "Other Analgesics And Antipyretics",
-        "Other Antianemic Preparations",
-        "Other Antibacterials",
-        "Other Antidiarrheals",
-        "Other Antihypertensives",
-        "Other Antineoplastic Agents",
-        "Other Beta-Lactam Antibacterials",
-        "Other Cardiac Preparations",
-        "Other Cold Preparations",
-        "Other Dermatological Preparations",
-        "Other Diagnostic Agents",
-        "Other Drugs For Acid Related Disorders",
-        "Other Drugs For Disorders Of The Musculo-Skeletal System",
-        "Other Drugs For Obstructive Airway Diseases, Inhalants",
-        "Other Drugs Used In Diabetes",
-        "Other Gynecologicals",
-        "Other Mineral Supplements",
-        "Other Nutrients",
-        "Other Ophthalmologicals",
-        "Other Otologicals",
-        "Other Plain Vitamin Preparations",
-        "Other Respiratory System Products",
-        "Other Sex Hormones And Modulators Of The Genital System",
-        "Other Systemic Drugs For Obstructive Airway Diseases",
-        "Other Vaccines",
-        "Other Vitamin Products, Combinations",
-        "Parasympathomimetics",
-        "Peripheral Vasodilators",
-        "Plant Alkaloids And Other Natural Products",
-        "Posterior Pituitary Lobe Hormones",
-        "Potassium",
-        "Progestogens",
-        "Progestogens And Estrogens In Combination",
-        "Propulsives",
-        "Protein Kinase Inhibitors",
-        "Psychostimulants, Agents Used For Adhd And Nootropics",
-        "Quinolone Antibacterials",
-        "Respiratory System",
-        "Selective Calcium Channel Blockers With Direct Cardiac Effects",
-        "Selective Calcium Channel Blockers With Mainly Vascular Effects",
-        "Stomatological Preparations",
-        "Sulfonamides And Trimethoprim",
-        "Surgical Aids",
-        "Tetracyclines",
-        "Throat Preparations",
-        "Thyroid Preparations",
-        "Topical Products For Joint And Muscular Pain",
-        "Urologicals",
-        "Uterotonics",
-        "Vasodilators Used In Cardiac Diseases",
-        "Viral Vaccines",
-        "Vitamin A And D, Incl. Combinations Of The Two",
-        "Vitamin B-Complex, Incl. Combinations",
-        "Vitamin B1, Plain And In Combination With Vitamin B6 And B12",
-        "Vitamin B12 And Folic Acid",
-        "Vitamin K And Other Hemostatics",
-        "X-Ray Contrast Media, Iodinated"
-        ]
-
-
-    try:
-        filters = [["item_group", "in", groups]]
-        # items = client.get_list("Item", filters=filters, fields=["name"],limit_page_length=5)
-        items = client.get_list(
-            "Item",
-            filters=filters,
-            fields=["name"],
-            limit_page_length=500,   # number of records to fetch
-            limit_start=0          # optional offset
-        )
-
-        print(f"Found {len(items)} items in groups {groups}")
-
-        for item in items:
-            name = item.get("name")
-            try:
-                client.delete("Item", name)
-                print(f"✅ Deleted Item: {name}")
-            except Exception as e:
-                print(f"❌ Failed to delete {name}: {e}")
-
-        print("🎯 Done deleting selected items.")
-
-    except Exception as e:
-        print(f"⚠️ Error deleting items: {e}")

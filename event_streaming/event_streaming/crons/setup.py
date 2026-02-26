@@ -4,7 +4,7 @@ from frappe.installer import update_site_config
 
 from ..api.frappe_client_transfers import get_sync_status,execute_doctype_fetch_and_sync, get_source_and_target_frappe_client_obj
 # bench execute event_streaming.event_streaming.crons.setup.run_instance_setup
-def run_instance_setup():
+def run_instance_setup(snooping=False):
     doctypes =['Queue State Status','Item Group','UOM','SHA Intervention','Item Attribute','Item Alternative','Item','Labs And Procedures Items','Healthcare Service Unit Type','Medical Department','SHA Benefit Package',
                'Clinical Procedure Template','Lab Test UOM','Concept FormKey Controls','Dictionary Concept','Lab Results Implications','Lab Test Template','Prescription Dosage','Dosage Form',
                'Health Program','Health Program Workflow','Health Program Field Mapping','Workflow','Signs And Symptoms',
@@ -15,7 +15,7 @@ def run_instance_setup():
     final_status = get_sync_status(master_url, "Description Reports Mapping").get("percentage", 0)
 
     # if fully synced, only allow run every 1 hour
-    if final_status > 95:
+    if final_status > 100:
         last_run_str = frappe.conf.LAST_RUN_KEY
         if last_run_str:
             last_run = datetime.fromisoformat(last_run_str)
@@ -32,6 +32,8 @@ def run_instance_setup():
         print(f"Sync status for {doctype}: {status}%")
         if status < 100:
             print("run the sync for", doctype)
+            if snooping:
+                return doctype
             add_progress_comment(f"Syncing {doctype} from Master", f"Syncing {doctype} from Master is at {round(status,0)} percent")
             execute_doctype_fetch_and_sync(master_url, doctype)
             break
