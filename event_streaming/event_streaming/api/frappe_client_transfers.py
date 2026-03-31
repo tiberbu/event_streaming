@@ -14,9 +14,9 @@ target_client = None
 
 # bench execute event_streaming.event_streaming.api.frappe_client_transfers.execute_doctype_fetch_and_sync Clinical Procedure Template
 @frappe.whitelist()
-def execute_doctype_fetch_and_sync(producer_url='https://master.tiberbu.health',doctype='Item Group'):
-    # insert_non_existing_records(producer_url,doctype)
-    enqueue(method=insert_non_existing_records, queue='long', timeout=3600, producer_url=producer_url,doctype=doctype)
+def execute_doctype_fetch_and_sync(producer_url='https://master.tiberbu.health',doctype='Labs And Procedures Items'):
+    insert_non_existing_records(producer_url,doctype)
+    # enqueue(method=insert_non_existing_records, queue='long', timeout=3600, producer_url=producer_url,doctype=doctype)
 
 
 # bench execute hmis.hmis.setup.utility_frappe_client.insert_non_existing_records  filters={"creation": [">", '2024-10-30 11:18:43.421245']} filters={'name': ['like', '%physical%']} Health Program Field Mapping
@@ -46,6 +46,7 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
 
     target_filters = filters.copy()
     target_filters.pop("creation", None)
+    target_filters.pop("disabled", None)
 
     list1 = target_client.get_list(doctype, fields=fields, limit_page_length=50000,filters=target_filters)
     list2 = source_client.get_list(doctype, fields=fields, limit_page_length=50000,filters=filters)
@@ -477,7 +478,7 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
 
 # bench execute event_streaming.event_streaming.api.frappe_client_transfers.update_existing_records
 @frappe.whitelist()
-def update_existing_records(producer_url='https://master.tiberbu.health',doctype='Item Attribute'):
+def update_existing_records(producer_url='https://master.tiberbu.health',doctype='Item'):
     clients = get_source_and_target_frappe_client_obj(producer_url)
     source_client = clients.get("source_client")
     target_client = clients.get("target_client")
@@ -502,33 +503,65 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
         filters = {"is_stock_item": 0,"disabled":0}
 
     fields = get_doctype_fields(doctype)
+    
+    target_filters = filters.copy()
+    target_filters.pop("creation", None)
+    target_filters.pop("disabled", None)
 
     source_list = source_client.get_list(doctype, fields=["name"], limit_page_length=50000, filters=filters)
-    target_list = target_client.get_list(doctype, fields=["name"], limit_page_length=50000, filters=filters)
+    target_list = target_client.get_list(doctype, fields=["name"], limit_page_length=50000, filters=target_filters)
 
     source_names = {item["name"] for item in source_list}
     target_names = {item["name"] for item in target_list}
 
-    common_names = source_names & target_names
-    print(f"{len(common_names)} records found in both source and target to update")
-    
+    common_names = sorted(source_names & target_names)
     total = len(common_names)
+    print(f"{total} records found in both source and target to update")
 
-    progress = frappe.get_doc({
-        "doctype": "Data Sync Progress",
-        "document_type": doctype,
-        "total_records": total,
-        "processed": 0,
-        "success": 0,
-        "failed": 0,
-        "status": "Running",
-        "synced_at":None
-    })
-    progress.insert(ignore_permissions=True)
-    frappe.db.commit()
-    
+    # --- Modified-based filtering (commented out for now, update all records instead) ---
+    # source_list = source_client.get_list(doctype, fields=["name", "modified"], limit_page_length=50000, filters=filters)
+    # target_list = target_client.get_list(doctype, fields=["name", "modified"], limit_page_length=50000, filters=filters)
+    # source_map = {item["name"]: item["modified"] for item in source_list}
+    # target_map = {item["name"]: item["modified"] for item in target_list}
+    # common_names = sorted([
+    #     name for name in source_map
+    #     if name in target_map and str(source_map[name]) > str(target_map[name])
+    # ])
+    # total = len(common_names)
+    # all_common = len(set(source_map) & set(target_map))
+    # print(f"{all_common} records in both, {total} modified on master since last sync")
+
+    # Check for an existing "Running" progress doc to resume from
+    existing = frappe.get_all(
+        "Data Sync Progress",
+        filters={"document_type": doctype, "status": "Running"},
+        order_by="creation desc",
+        limit_page_length=1
+    )
+
+    if existing:
+        progress = frappe.get_doc("Data Sync Progress", existing[0].name)
+        progress.processed = int(progress.processed or 0)
+        progress.success = int(progress.success or 0)
+        progress.failed = int(progress.failed or 0)
+        skip = progress.processed
+        common_names = common_names[skip:]
+        print(f"Resuming from record {skip}, {len(common_names)} remaining")
+    else:
+        progress = frappe.get_doc({
+            "doctype": "Data Sync Progress",
+            "document_type": doctype,
+            "total_records": total,
+            "processed": 0,
+            "success": 0,
+            "failed": 0,
+            "status": "Running",
+            "synced_at": None
+        })
+        progress.insert(ignore_permissions=True)
+        frappe.db.commit()
+
     num=0
-    # return
     for name in common_names:
         try:
             source_doc = source_client.get_doc(doctype, name)
@@ -542,7 +575,7 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
 
 
             if doctype == 'Lab Test Template':
-                parent_data = source_client.get_doc(doctype, name)
+                parent_data = source_doc
 
                 # custom_terminology_codes
                 terminology_codes = parent_data.get("custom_terminology_codes", [])
@@ -601,7 +634,7 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
                 update_data["custom_results_implications"] = formatted_results_implications
 
             if doctype == 'ICD11 Collection':
-                parent_data = source_client.get_doc(doctype, name)
+                parent_data = source_doc
 
                 expanded_codes = parent_data.get("expanded_codes", [])
                 formatted_codes = [
@@ -613,7 +646,7 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
                 update_data["expanded_codes"] = formatted_codes
                 
             if doctype == 'Prescription Dosage':
-                parent_data = source_client.get_doc(doctype, name)
+                parent_data = source_doc
 
                 expanded_codes = parent_data.get("dosage_strength", [])
                 formatted_codes = [
@@ -626,7 +659,7 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
                 update_data["dosage_strength"] = formatted_codes
 
             if doctype == 'Description Reports Mapping':
-                parent_data = source_client.get_doc(doctype,name)
+                parent_data = source_doc
 
                 # table_multiselect_gavr (ICD11 Multiselect)
                 icd11_multiselect = parent_data.get("table_multiselect_gavr", [])
@@ -691,8 +724,8 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
                 update_data["forms"] = formatted_form_templates
             
             if doctype == 'Item Attribute':
-                parent_data = source_client.get_doc(doctype,name)
-                
+                parent_data = source_doc
+
                 # item_attribute_values
                 attribute_values = parent_data.get("item_attribute_values", [])
                 formatted_attribute_values = [
@@ -700,12 +733,142 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
                     for attr in attribute_values
                 ]
                 update_data["item_attribute_values"] = formatted_attribute_values
+
+            if doctype == 'Item':
+                parent_data = source_doc
+
+                # attributes
+                attributes = parent_data.get("attributes", [])
+                formatted_attributes = [
+                    {"attribute": attr.get("attribute"), "attribute_value": attr.get("attribute_value")}
+                    for attr in attributes
+                ]
+
+                # uoms
+                uoms = parent_data.get("uoms", [])
+                formatted_uoms = [
+                    {"uom": uom.get("uom"), "conversion_factor": uom.get("conversion_factor")}
+                    for uom in uoms
+                ]
+
+                # custom_terminology_codes
+                terminology_codes = parent_data.get("custom_terminology_codes", [])
+                formatted_terminology_codes = [
+                    {"terminology": code.get("terminology"),"link":code.get("link"), "code": code.get("code")}
+                    for code in terminology_codes
+                ]
+
+                update_data["attributes"] = formatted_attributes
+                update_data["uoms"] = formatted_uoms
+                update_data["custom_terminology_codes"] = formatted_terminology_codes
+
+            if doctype == 'Clinical Procedure Template':
+                parent_data = source_doc
+
+                # custom_terminology_codes
+                terminology_codes = parent_data.get("custom_terminology_codes", [])
+                formatted_terminology_codes = [
+                    {"terminology": code.get("terminology"),"link":code.get("link"), "code": code.get("code")}
+                    for code in terminology_codes
+                ]
+
+                # codification_table
+                codifications = parent_data.get("codification_table", [])
+                formatted_codifications = [
+                    {"code": code.get("code"),"code_system":code.get("code_system"), "code_value": code.get("code_value"),
+                     "definition": code.get("definition"),"system": code.get("system"),"oid": code.get("oid")}
+                    for code in codifications
+                ]
+
+                # custom_pre_auth_configuration
+                pre_auth_configurations = parent_data.get("custom_pre_auth_configuration", [])
+                formatted_pre_auth_configurations = [
+                    {"facility_level": code.get("facility_level"),"requires_pre_auth":code.get("requires_pre_auth"), "scheme": code.get("scheme")}
+                    for code in pre_auth_configurations
+                ]
+
+                # custom_interventions_configuration
+                interventions_configuration = parent_data.get("custom_interventions_configuration", [])
+                formatted_interventions_configuration = [
+                    {"intervention_code": code.get("intervention_code"),"sha_intervention":code.get("sha_intervention"),
+                     "speciality_intervention": code.get("speciality_intervention"),"speciality_intervention_type": code.get("speciality_intervention_type")}
+                    for code in interventions_configuration
+                ]
+
+                update_data["custom_terminology_codes"] = formatted_terminology_codes
+                update_data["codification_table"] = formatted_codifications
+                update_data["custom_pre_auth_configuration"] = formatted_pre_auth_configurations
+                update_data["custom_interventions_configuration"] = formatted_interventions_configuration
+
+            if doctype == 'SHA Intervention':
+                parent_data = source_doc
+
+                # payment_mechanism
+                payment_mechanisms = parent_data.get("payment_mechanism", [])
+                formatted_payment_mechanisms = [
+                    {"payment_mode": mech.get("payment_mode"),"is_civil_servant": mech.get("is_civil_servant")}
+                    for mech in payment_mechanisms
+                ]
+                update_data["payment_mechanism"] = formatted_payment_mechanisms
+
+            if doctype == 'Role Profile':
+                parent_data = source_doc
+
+                # roles
+                roles = parent_data.get("roles", [])
+                formatted_roles = [
+                    {"role": role.get("role")}
+                    for role in roles
+                ]
+                update_data["roles"] = formatted_roles
+
+            if doctype == 'Workflow':
+                parent_data = source_doc
+
+                # states
+                states = parent_data.get("states", [])
+                formatted_states = [
+                    {"allow_edit": state.get("allow_edit"),"avoid_status_override": state.get("avoid_status_override"),
+                     "doc_status": state.get("doc_status"),"docstatus": state.get("docstatus"),
+                     "send_email": state.get("send_email"),"state": state.get("state")}
+                    for state in states
+                ]
+                update_data["states"] = formatted_states
+
+                # transitions
+                transitions = parent_data.get("transitions", [])
+                formatted_transitions = [
+                    {
+                        "action": transition.get("action"),
+                        "allow_self_approval": transition.get("allow_self_approval"),
+                        "allowed": transition.get("allowed"),
+                        "docstatus": transition.get("docstatus"),
+                        "next_state": transition.get("next_state"),
+                        "send_email_to_creator": transition.get("send_email_to_creator"),
+                        "state": transition.get("state"),
+                    }
+                    for transition in transitions
+                ]
+                update_data["transitions"] = formatted_transitions
+
+            if doctype == 'Health Program Workflow':
+                parent_data = source_doc
+
+                # workflow_state_transitions
+                transitions = parent_data.get("workflow_state_transitions", [])
+                formatted_transitions = [
+                    {"entry_point": transition.get("entry_point"),"state": transition.get("state"),
+                    "next_state": transition.get("next_state")}
+                    for transition in transitions
+                ]
+                update_data["workflow_state_transitions"] = formatted_transitions
+
             # Perform the update
             clean_data = clean_update_data(update_data)
             target_client.update(clean_data)
-            print(f"{num} Updated {name} successfully")
             num+=1
-            
+            print(f"{num}/{len(common_names)} Updated {name} successfully")
+
             progress.success += 1
 
         except Exception as e:
@@ -722,6 +885,89 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
     progress.status = "Completed"
     progress.save(ignore_permissions=True)
     frappe.db.commit()
+
+# bench execute event_streaming.event_streaming.api.frappe_client_transfers.update_item_names
+@frappe.whitelist()
+def update_item_names(producer_url='https://master.tiberbu.health', doctype='Item'):
+    clients = get_source_and_target_frappe_client_obj(producer_url)
+    source_client = clients.get("source_client")
+    target_client = clients.get("target_client")
+
+    filters = {}
+    if doctype == 'Item Alternative':
+        doctype = "Item"
+        filters = {"is_stock_item": 1, "has_variants": 1, "custom_is_ppb_drug": 1, "disabled": 0}
+    elif doctype == 'Item':
+        filters = {"is_stock_item": 1, "has_variants": 0, "custom_is_ppb_drug": 1, "disabled": 0}
+    elif doctype == 'Labs And Procedures Items':
+        doctype = "Item"
+        filters = {"is_stock_item": 0, "disabled": 0}
+
+    source_list = source_client.get_list("Item", fields=["name", "item_name"], limit_page_length=50000, filters=filters)
+    target_list = target_client.get_list("Item", fields=["name"], limit_page_length=50000, filters=filters)
+
+    source_map = {item["name"]: item["item_name"] for item in source_list}
+    target_names = {item["name"] for item in target_list}
+
+    to_update = sorted(name for name in source_map if name in target_names)
+    total = len(to_update)
+    print(f"{total} common items to update item_name")
+
+    # Resume support
+    existing = frappe.get_all(
+        "Data Sync Progress",
+        filters={"document_type": doctype, "status": "Running"},
+        order_by="creation desc",
+        limit_page_length=1
+    )
+
+    if existing:
+        progress = frappe.get_doc("Data Sync Progress", existing[0].name)
+        progress.processed = int(progress.processed or 0)
+        progress.success = int(progress.success or 0)
+        progress.failed = int(progress.failed or 0)
+        skip = progress.processed
+        to_update = to_update[skip:]
+        print(f"Resuming from record {skip}, {len(to_update)} remaining")
+    else:
+        progress = frappe.get_doc({
+            "doctype": "Data Sync Progress",
+            "document_type": doctype,
+            "total_records": total,
+            "processed": 0,
+            "success": 0,
+            "failed": 0,
+            "status": "Running",
+            "synced_at": None
+        })
+        progress.insert(ignore_permissions=True)
+        frappe.db.commit()
+
+    num = 0
+    for name in to_update:
+        try:
+            target_client.update({
+                "doctype": "Item",
+                "name": name,
+                "item_name": source_map[name],
+            })
+            num += 1
+            print(f"{num}/{len(to_update)} Updated item_name for {name}")
+            progress.success += 1
+        except Exception as e:
+            print(f"Failed to update {name}: {e}")
+            progress.failed += 1
+        finally:
+            progress.processed += 1
+            progress.save(ignore_permissions=True)
+            frappe.db.commit()
+
+    progress.synced_at = frappe.utils.now()
+    progress.status = "Completed"
+    progress.save(ignore_permissions=True)
+    frappe.db.commit()
+    print(f"Done. {num}/{len(to_update)} item names updated.")
+
 
 def clean_update_data(update_data):
     # Remove fields that cannot be updated
@@ -752,7 +998,7 @@ def get_doctype_fields(doctype_name='Clinical Procedure Template'):
 
 def get_source_and_target_frappe_client_obj(producer_url):
     producer_doc = frappe.get_doc("Event Producer", producer_url)
-    source_client = FrappeClient(producer_url, api_key=producer_doc.api_key, api_secret=producer_doc.get_password("api_secret"))
+    source_client = FrappeClient(producer_url, api_key=producer_doc.api_key, api_secret='c71e20c68d96e14')
     target_client = FrappeClient(get_host_name(), api_key=get_user_api_key(producer_doc.user).get('api_key'), api_secret=get_user_api_key(producer_doc.user).get('api_secret'))
     return {'source_client':source_client,'target_client':target_client}
 
@@ -762,11 +1008,19 @@ def get_user_api_key(user):
     user = frappe.get_doc("User", user)
     if not user.api_key or not user.api_secret:
         return {"error": "API key or secret does not exist for this user."}
+        
+    return {'api_key':'57480720296d13e','api_secret':'5dc09f8628deb44'}#nairobi
+    # return {'api_key':"618d952c6dc3e1c",'api_secret':'c1805b5785ac91d'} #elgeyo
+    return {'api_key':"f9513f6d1363e7a",'api_secret':'a0fc7e676baeae7'} #kericho
+
     return {"api_key": user.api_key, "api_secret": user.get_password('api_secret')}
 
 def get_host_name():
     site_config = frappe.local.conf
     host_name = site_config.get('hostname', 'default_host_name')    
+    
+    return 'https://nairobi.tiberbu.app'
+
     return host_name
 
 
