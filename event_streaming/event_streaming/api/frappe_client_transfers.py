@@ -14,7 +14,7 @@ target_client = None
 
 # bench execute event_streaming.event_streaming.api.frappe_client_transfers.execute_doctype_fetch_and_sync Clinical Procedure Template
 @frappe.whitelist()
-def execute_doctype_fetch_and_sync(producer_url='https://master.tiberbu.health',doctype='Labs And Procedures Items'):
+def execute_doctype_fetch_and_sync(producer_url='https://master.tiberbu.health',doctype='Clinical Procedure Template'):
     insert_non_existing_records(producer_url,doctype)
     # enqueue(method=insert_non_existing_records, queue='long', timeout=3600, producer_url=producer_url,doctype=doctype)
 
@@ -91,7 +91,7 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
                     data[field] = document.get(field)
                 # add attribute child table to item
                 if doctype == 'Item':
-                    if item_name in ['IBUPROFEN','Ibuprofen SUSPENSION-60ml','Aceclofenac/Paracetamol/','ALBENDAZOLE','METRONIDAZOLE','ATORVASTATIN CALCIUM','CHLORAMPHENICOL']:
+                    if item_name in []:
                         print(f"Skipping problematic Item: {item_name}")
                         continue
                     
@@ -150,7 +150,7 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
                     if remote_item:
                         local_item = target_client.get_doc("Item", remote_item)
                         if local_item:
-                            print(f"Item '{local_item}' exists locally.")
+                            print(f"Item '{local_item.get('item_name')}' exists locally.")
                         else:
                             print(f"Item '{remote_item}' DOES NOT exist locally. Creating it...")
                             target_client.insert({
@@ -1009,8 +1009,9 @@ def get_user_api_key(user):
     if not user.api_key or not user.api_secret:
         return {"error": "API key or secret does not exist for this user."}
         
-    return {'api_key':'57480720296d13e','api_secret':'5dc09f8628deb44'}#nairobi
+    # return {'api_key':'57480720296d13e','api_secret':'5dc09f8628deb44'}#nairobi
     # return {'api_key':"618d952c6dc3e1c",'api_secret':'c1805b5785ac91d'} #elgeyo
+    return {'api_key':"09ced068b176bdd",'api_secret':'7bc56725259f8af'} #reliable
     return {'api_key':"f9513f6d1363e7a",'api_secret':'a0fc7e676baeae7'} #kericho
 
     return {"api_key": user.api_key, "api_secret": user.get_password('api_secret')}
@@ -1019,7 +1020,7 @@ def get_host_name():
     site_config = frappe.local.conf
     host_name = site_config.get('hostname', 'default_host_name')    
     
-    return 'https://nairobi.tiberbu.app'
+    return 'https://reliable.careverse.app'
 
     return host_name
 
