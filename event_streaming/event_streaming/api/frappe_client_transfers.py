@@ -291,13 +291,8 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
                 if doctype == 'SHA Intervention':
                     parent_data = source_client.get_doc(doctype, document.get("name"))
 
-                    # payment_mechanism
-                    payment_mechanisms = parent_data.get("payment_mechanism", [])
-                    formatted_payment_mechanisms = [
-                        {"payment_mode": mech.get("payment_mode"),"is_civil_servant": mech.get("is_civil_servant")}
-                        for mech in payment_mechanisms
-                    ]
-                    data["payment_mechanism"] = formatted_payment_mechanisms
+                    # payment_mechanism is a plain string field, not a child table
+                    data["payment_mechanism"] = parent_data.get("payment_mechanism", "")
 
                 if doctype == 'Role Profile':
                     parent_data = source_client.get_doc(doctype, document.get("name"))
