@@ -418,12 +418,17 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
                     formatted_codes = [
                         {
                             "code": row.get("code"),
-                            "description": row.get("description")
+                            "description": row.get("description"),
+                            "sex": row.get("sex"),
+                            "min_age": row.get("min_age"),
+                            "max_age": row.get("max_age"),
+                            "program_area": row.get("program_area"),
+                            "fp_method": row.get("fp_method"),
                         }
                         for row in expanded_codes
                     ]
                     data["expanded_codes"] = formatted_codes
-                    
+
                 if doctype == 'Prescription Dosage':
                     parent_data = source_client.get_doc(doctype, document.get("name"))
 
@@ -601,7 +606,13 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
                 expanded_codes = parent_data.get("expanded_codes", [])
                 formatted_codes = [
                     {
-                        "code": row.get("code")
+                        "code": row.get("code"),
+                        "description": row.get("description"),
+                        "sex": row.get("sex"),
+                        "min_age": row.get("min_age"),
+                        "max_age": row.get("max_age"),
+                        "program_area": row.get("program_area"),
+                        "fp_method": row.get("fp_method"),
                     }
                     for row in expanded_codes
                 ]
