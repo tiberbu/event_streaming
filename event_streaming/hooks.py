@@ -7,6 +7,10 @@ app_description = "Event Streaming for frappe"
 app_email = "hello@frappe.io"
 app_license = "MIT"
 
+fixtures = [
+    {"dt": "Web Page", "filters": [["name", "=", "master-sync"]]},
+]
+
 # Includes in <head>
 # ------------------
 
