@@ -2,20 +2,34 @@ import frappe
 from datetime import datetime, date, timedelta
 from frappe.installer import update_site_config
 
-from ..api.frappe_client_transfers import get_sync_status,execute_doctype_fetch_and_sync, get_source_and_target_frappe_client_obj
+from ..api.frappe_client_transfers import get_sync_status,execute_doctype_fetch_and_sync, update_existing_records, get_source_and_target_frappe_client_obj
+
+def get_sync_settings():
+    """Read sync configuration from Data Sync Settings doctype."""
+    settings = frappe.get_single("Data Sync Settings")
+    return settings
+
+def get_doctypes_for(sync_type):
+    """Get list of doctypes enabled for a given sync type (insert_sync, update_sync, regular_sync)."""
+    settings = get_sync_settings()
+    return [row.document_type for row in settings.sync_doctypes if getattr(row, sync_type, 0)]
+
+def get_master_url():
+    return frappe.get_single("Data Sync Settings").master_url or "https://master.tiberbu.health"
+
 # bench execute event_streaming.event_streaming.crons.setup.run_instance_setup
 def run_instance_setup(snooping=False):
-    doctypes =['Queue State Status','Item Group','UOM','SHA Intervention','Item Attribute','Item Alternative','Item','Labs And Procedures Items','Healthcare Service Unit Type','Medical Department','SHA Benefit Package',
-               'Clinical Procedure Template','Lab Test UOM','Concept FormKey Controls','Dictionary Concept','Lab Results Implications','Lab Test Template','Prescription Dosage','Dosage Form',
-               'Health Program','Health Program Workflow','Health Program Field Mapping','Workflow','Signs And Symptoms',
-               'ICD11 Collection','Description Reports Mapping']
-    master_url = "https://master.tiberbu.health"
-    
-    # check status of the last doctype (Description Reports Mapping)
-    final_status = get_sync_status(master_url, "Description Reports Mapping").get("percentage", 0)
+    doctypes = get_doctypes_for("insert_sync")
+    if not doctypes:
+        print("No doctypes configured for insert sync")
+        return
+    master_url = get_master_url()
+
+    # check status of the last configured doctype
+    final_status = get_sync_status(master_url, doctypes[-1]).get("percentage", 0)
 
     # if fully synced, only allow run every 1 hour
-    if final_status > 100:
+    if final_status >= 100:
         last_run_str = frappe.conf.LAST_RUN_KEY
         if last_run_str:
             last_run = datetime.fromisoformat(last_run_str)
@@ -40,9 +54,27 @@ def run_instance_setup(snooping=False):
 
 # bench execute event_streaming.event_streaming.crons.setup.regularly_sync_essential_doctypes
 def regularly_sync_essential_doctypes():
-    master_url = "https://master.tiberbu.health"
-    doctypes =['Item Group','Concept FormKey Controls','ICD11 Collection','Dictionary Concept','Health Program','Health Program Workflow',
-               'Health Program Field Mapping','Workflow']
+    doctypes = get_doctypes_for("regular_sync")
+    if not doctypes:
+        print("No doctypes configured for regular sync")
+        return
+    master_url = get_master_url()
+
+    # check status of the last configured doctype
+    final_status = get_sync_status(master_url, doctypes[-1]).get("percentage", 0)
+
+    # if fully synced, only allow run every 1 hour
+    if final_status >= 100:
+        last_run_str = frappe.conf.get("REGULAR_SYNC_LAST_RUN")
+        if last_run_str:
+            last_run = datetime.fromisoformat(last_run_str)
+            if datetime.now() < last_run + timedelta(hours=1):
+                frappe.logger().info("Skipping regularly_sync_essential_doctypes: already complete and last run <1h ago")
+                print("skipping regular sync")
+                return
+
+        update_site_config('REGULAR_SYNC_LAST_RUN', datetime.now().isoformat(), validate=True)
+
     for doctype in doctypes:
         status = get_sync_status(master_url, doctype).get('percentage', 0)
         print(f"Sync status for {doctype}: {status}%")
@@ -50,7 +82,70 @@ def regularly_sync_essential_doctypes():
             print("run the sync for", doctype)
             add_progress_comment(f"Syncing {doctype} from Master", f"Syncing {doctype} from Master is at {round(status,0)} percent")
             execute_doctype_fetch_and_sync(master_url, doctype)
+            break
     
+
+# bench execute event_streaming.event_streaming.crons.setup.run_update_sync
+def run_update_sync():
+    """Update existing records from master. Processes one doctype per run.
+    If a doctype is still Running (from a previous run), it resumes it.
+    If completed, moves to the next one."""
+    doctypes = get_doctypes_for("update_sync")
+    if not doctypes:
+        print("No doctypes configured for update sync")
+        return
+    master_url = get_master_url()
+
+    for doctype in doctypes:
+        # Check if this doctype already has a "Running" progress — resume it
+        running = frappe.get_all(
+            "Data Sync Progress",
+            filters={"document_type": doctype, "status": "Running"},
+            limit_page_length=1
+        )
+        if running:
+            # Check if another process is actively working on it (modified in last 10 minutes)
+            progress_doc = frappe.get_doc("Data Sync Progress", running[0].name)
+            last_modified = frappe.utils.get_datetime(progress_doc.modified)
+            if frappe.utils.now_datetime() - last_modified < timedelta(minutes=10):
+                print(f"Skipping {doctype}: another process is still active (last updated {last_modified})")
+                break
+
+            print(f"Resuming update for {doctype}...")
+            try:
+                update_existing_records(master_url, doctype)
+            except Exception as e:
+                print(f"Failed to resume {doctype}: {e}")
+                frappe.log_error(f"Update sync failed for {doctype}: {e}", "Update Sync Error")
+            break
+
+        # Check if this doctype has been completed — uncheck update_sync and skip
+        completed = frappe.get_all(
+            "Data Sync Progress",
+            filters={"document_type": doctype, "status": "Completed"},
+            limit_page_length=1
+        )
+        if completed:
+            settings = get_sync_settings()
+            for row in settings.sync_doctypes:
+                if row.document_type == doctype:
+                    row.update_sync = 0
+                    break
+            settings.save(ignore_permissions=True)
+            frappe.db.commit()
+            print(f"Update sync completed for {doctype}, unchecked update_sync flag")
+            continue
+
+        # Not started yet — start it
+        print(f"Starting update for {doctype}...")
+        try:
+            add_progress_comment(f"Updating {doctype} from Master", f"Running update sync for {doctype}")
+            update_existing_records(master_url, doctype)
+        except Exception as e:
+            print(f"Failed to update {doctype}: {e}")
+            frappe.log_error(f"Update sync failed for {doctype}: {e}", "Update Sync Error")
+        break
+
 
 def add_progress_comment(subject,text):
 	doc = frappe.new_doc("Comment")
