@@ -293,15 +293,15 @@ def _create_local_item(item_code, item_dict, template_created=False):
 
 		# Fetch local template flags for OR-ing
 		template_ppb = frappe.db.get_value(
-			"Item", template_code, "custom_is_ppb_drug", default=0
-		)
+			"Item", template_code, "custom_is_ppb_drug"
+		) or 0
 		template_bespoke = (
 			frappe.db.get_value(
-				"Item", template_code, "custom_is_bespoke_drug", default=0
+				"Item", template_code, "custom_is_bespoke_drug"
 			)
 			if bespoke_local
 			else 0
-		)
+		) or 0
 		pending = (
 			1 if (pending[0] or template_ppb) else 0,
 			1 if (pending[1] or template_bespoke) else 0,
