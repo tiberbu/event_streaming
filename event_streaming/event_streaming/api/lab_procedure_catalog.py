@@ -243,6 +243,12 @@ def import_lab_template(template_code):
 	_template = _sanitize_lab_template_dict(remote_doc)
 	_template["name"] = template_code
 	_template["item"] = item_code
+	# Tell the healthcare app's after_insert hook that the Item already exists
+	# so it skips its own item creation (which would cause a duplicate error).
+	_template["link_existing_item"] = 1
+	# Prevent the on_update hook from trying to re-save the Item we just created
+	# (it would fail on duplicate UOM entries in the conversion factor table).
+	_template["change_in_item"] = 0
 
 	doc = frappe.get_doc(_template)
 	doc.insert(ignore_permissions=True, ignore_mandatory=True)
@@ -294,6 +300,11 @@ def import_procedure_template(template_code):
 
 	item_code = (remote_doc.get("item") or "").strip()
 	item_created = False
+	# Pre-create the Item so the template's `item` Link field validates.
+	# The healthcare app's Clinical Procedure Template has an after_insert hook
+	# (create_item_from_template) that would normally auto-create the Item, but
+	# we set `item` to empty below so the hook skips that and we avoid a
+	# duplicate item_code IntegrityError.
 	if item_code:
 		if not frappe.db.exists("Item", item_code):
 			remote_item = client.get_doc("Item", item_code)
@@ -303,10 +314,18 @@ def import_procedure_template(template_code):
 	_proc = _sanitize_procedure_template_dict(remote_doc)
 	_proc["name"] = template_code
 	_proc["item"] = item_code
+	# Tell the healthcare app's after_insert hook that the Item already exists
+	# so it skips its own item creation (which would cause a duplicate error).
+	_proc["link_existing_item"] = 1
 
 	doc = frappe.get_doc(_proc)
 	doc.insert(ignore_permissions=True, ignore_mandatory=True)
 	frappe.db.commit()
+
+	# Now link the pre-created item to the template
+	if item_code:
+		frappe.db.set_value("Clinical Procedure Template", template_code, "item", item_code)
+		frappe.db.commit()
 
 	return {
 		"success": True,
