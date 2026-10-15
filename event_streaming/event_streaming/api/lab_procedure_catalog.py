@@ -97,35 +97,21 @@ def search_lab_templates(search_term, limit=20):
 
 	client = _get_master_client()
 
-	# Search by lab_test_name OR lab_test_code
-	# Frappe get_list doesn't support OR directly, so we run two queries
-	# and merge.
-	rows_by_name = client.get_list(
+	# Fetch all enabled templates and filter client-side for case-insensitive
+	# matching on name or code (Frappe's LIKE is case-sensitive on this DB).
+	all_rows = client.get_list(
 		"Lab Test Template",
-		filters=[
-			["disabled", "=", 0],
-			["lab_test_name", "like", search_term],
-		],
+		filters=["disabled", "=", 0],
 		fields=["name", "lab_test_name", "lab_test_code", "item", "is_billable", "lab_test_template_type"],
-		limit_page_length=limit,
+		limit_page_length=500,
 	)
 
-	rows_by_code = client.get_list(
-		"Lab Test Template",
-		filters=[
-			["disabled", "=", 0],
-			["lab_test_code", "like", search_term],
-		],
-		fields=["name", "lab_test_name", "lab_test_code", "item", "is_billable", "lab_test_template_type"],
-		limit_page_length=limit,
-	)
-
-	# Merge and deduplicate
-	seen = set()
+	term = search_term.lower()
 	items = []
-	for row in (rows_by_name or []) + (rows_by_code or []):
-		if row["name"] not in seen:
-			seen.add(row["name"])
+	for row in all_rows or []:
+		name_match = term in (row.get("lab_test_name") or "").lower()
+		code_match = term in (row.get("lab_test_code") or "").lower()
+		if name_match or code_match:
 			items.append(
 				{
 					"template_code": row["name"],
@@ -136,8 +122,8 @@ def search_lab_templates(search_term, limit=20):
 					"lab_test_template_type": row.get("lab_test_template_type") or "",
 				}
 			)
-		if len(items) >= limit:
-			break
+			if len(items) >= limit:
+				break
 
 	# Enrich with local availability
 	_enrich_lab_templates_with_local(items)
