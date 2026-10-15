@@ -188,3 +188,110 @@ def get_master_item(item_code):
 		for a in (item.get("attributes") or [])
 	]
 	return item_dict
+
+
+# ---------------------------------------------------------------------------
+# Master-side Lab Test Template / Clinical Procedure Template search.
+# Same pattern as search_master_items: runs on the master instance,
+# queries the local database, no Event Producer needed.
+# ---------------------------------------------------------------------------
+
+
+@frappe.whitelist()
+def search_master_lab_templates(search_term, limit=20):
+	"""Search the master instance's Lab Test Template doctype.
+
+	Identical pattern to ``search_master_items`` — queries the local
+	database on the instance where it runs. On master, this searches
+	the master catalog.
+
+	:param search_term: minimum 2 characters, maximum 100.
+	:param limit: 1-50 results returned.
+	:return: ``{"items": [...], "total": N}``
+	"""
+	if not search_term or len(search_term.strip()) < 2:
+		frappe.throw("Search term must be at least 2 characters.")
+	if len(search_term.strip()) > 100:
+		frappe.throw("Search term must be at most 100 characters.")
+
+	limit = max(1, min(int(limit), 50))
+	search_term = search_term.strip().lower()
+
+	rows = frappe.get_all(
+		"Lab Test Template",
+		filters={"disabled": 0},
+		fields=[
+			"name",
+			"lab_test_name",
+			"lab_test_code",
+			"item",
+			"is_billable",
+			"lab_test_template_type",
+		],
+		limit_page_length=500,
+	)
+
+	items = []
+	for r in rows:
+		name_match = search_term in (r.get("lab_test_name") or "").lower()
+		code_match = search_term in (r.get("lab_test_code") or "").lower()
+		if name_match or code_match:
+			items.append(
+				{
+					"template_code": r["name"],
+					"lab_test_name": r.get("lab_test_name") or r["name"],
+					"lab_test_code": r.get("lab_test_code") or "",
+					"item": r.get("item") or "",
+					"is_billable": r.get("is_billable", 0),
+					"lab_test_template_type": r.get("lab_test_template_type") or "",
+				}
+			)
+			if len(items) >= limit:
+				break
+
+	return {"items": items, "total": len(items)}
+
+
+@frappe.whitelist()
+def search_master_procedure_templates(search_term, limit=20):
+	"""Search the master instance's Clinical Procedure Template doctype.
+
+	Identical pattern to ``search_master_items`` — queries the local
+	database on the instance where it runs. On master, this searches
+	the master catalog.
+
+	:param search_term: minimum 2 characters, maximum 100.
+	:param limit: 1-50 results returned.
+	:return: ``{"items": [...], "total": N}``
+	"""
+	if not search_term or len(search_term.strip()) < 2:
+		frappe.throw("Search term must be at least 2 characters.")
+	if len(search_term.strip()) > 100:
+		frappe.throw("Search term must be at most 100 characters.")
+
+	limit = max(1, min(int(limit), 50))
+	search_term = search_term.strip()
+
+	rows = frappe.get_all(
+		"Clinical Procedure Template",
+		filters={
+			"disabled": 0,
+			"template": ["like", "%" + search_term + "%"],
+		},
+		fields=["name", "template", "item", "is_billable", "item_group"],
+		limit_page_length=limit,
+	)
+
+	items = []
+	for r in rows:
+		items.append(
+			{
+				"template_code": r["name"],
+				"template_name": r.get("template") or r["name"],
+				"item": r.get("item") or "",
+				"is_billable": r.get("is_billable", 0),
+				"item_group": r.get("item_group") or "",
+			}
+		)
+
+	return {"items": items, "total": len(items)}
