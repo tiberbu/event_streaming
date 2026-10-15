@@ -101,7 +101,7 @@ def search_lab_templates(search_term, limit=20):
 	# matching on name or code (Frappe's LIKE is case-sensitive on this DB).
 	all_rows = client.get_list(
 		"Lab Test Template",
-		filters=["disabled", "=", 0],
+		filters={"disabled": 0},
 		fields=["name", "lab_test_name", "lab_test_code", "item", "is_billable", "lab_test_template_type"],
 		limit_page_length=500,
 	)
