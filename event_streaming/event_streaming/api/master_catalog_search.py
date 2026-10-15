@@ -270,28 +270,38 @@ def search_master_procedure_templates(search_term, limit=20):
 		frappe.throw("Search term must be at most 100 characters.")
 
 	limit = max(1, min(int(limit), 50))
-	search_term = search_term.strip()
+	search_term = search_term.strip().lower()
 
 	rows = frappe.get_all(
 		"Clinical Procedure Template",
-		filters={
-			"disabled": 0,
-			"template": ["like", "%" + search_term + "%"],
-		},
-		fields=["name", "template", "item", "is_billable", "item_group"],
-		limit_page_length=limit,
+		filters={"disabled": 0},
+		fields=[
+			"name",
+			"template",
+			"item_code",
+			"item",
+			"is_billable",
+			"item_group",
+		],
+		limit_page_length=500,
 	)
 
 	items = []
 	for r in rows:
-		items.append(
-			{
-				"template_code": r["name"],
-				"template_name": r.get("template") or r["name"],
-				"item": r.get("item") or "",
-				"is_billable": r.get("is_billable", 0),
-				"item_group": r.get("item_group") or "",
-			}
-		)
+		name_match = search_term in (r.get("template") or "").lower()
+		code_match = search_term in (r.get("item_code") or "").lower()
+		if name_match or code_match:
+			items.append(
+				{
+					"template_code": r["name"],
+					"template_name": r.get("template") or r["name"],
+					"item_code": r.get("item_code") or "",
+					"item": r.get("item") or "",
+					"is_billable": r.get("is_billable", 0),
+					"item_group": r.get("item_group") or "",
+				}
+			)
+			if len(items) >= limit:
+				break
 
 	return {"items": items, "total": len(items)}
