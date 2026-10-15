@@ -96,39 +96,27 @@ def search_lab_templates(search_term, limit=20):
 	search_term = search_term.strip()
 
 	client = _get_master_client()
-
-	# Fetch all enabled templates and filter client-side for case-insensitive
-	# matching on name or code (Frappe's LIKE is case-sensitive on this DB).
-	all_rows = client.get_list(
-		"Lab Test Template",
-		filters={"disabled": 0},
-		fields=["name", "lab_test_name", "lab_test_code", "item", "is_billable", "lab_test_template_type"],
-		limit_page_length=500,
+	response = client.get_api(
+		"event_streaming.event_streaming.api.master_catalog_search.search_master_lab_templates",
+		params={"search_term": search_term, "limit": limit},
 	)
 
-	term = search_term.lower()
-	items = []
-	for row in all_rows or []:
-		name_match = term in (row.get("lab_test_name") or "").lower()
-		code_match = term in (row.get("lab_test_code") or "").lower()
-		if name_match or code_match:
-			items.append(
-				{
-					"template_code": row["name"],
-					"lab_test_name": row.get("lab_test_name") or row["name"],
-					"lab_test_code": row.get("lab_test_code") or "",
-					"item": row.get("item") or "",
-					"is_billable": row.get("is_billable", 0),
-					"lab_test_template_type": row.get("lab_test_template_type") or "",
-				}
-			)
-			if len(items) >= limit:
-				break
+	if response is None:
+		frappe.throw("Master instance returned an empty response.")
 
-	# Enrich with local availability
+	if isinstance(response, str):
+		try:
+			response = json.loads(response)
+		except ValueError:
+			response = {}
+
+	data = response or {}
+	items = data.get("items", [])
+	total = data.get("total", len(items))
+
 	_enrich_lab_templates_with_local(items)
 
-	return {"items": items, "total": len(items)}
+	return {"items": items, "total": total}
 
 
 @frappe.whitelist()
@@ -148,32 +136,27 @@ def search_procedure_templates(search_term, limit=20):
 	search_term = search_term.strip()
 
 	client = _get_master_client()
-
-	rows = client.get_list(
-		"Clinical Procedure Template",
-		filters=[
-			["disabled", "=", 0],
-			["template", "like", search_term],
-		],
-		fields=["name", "template", "item", "is_billable", "item_group"],
-		limit_page_length=limit,
+	response = client.get_api(
+		"event_streaming.event_streaming.api.master_catalog_search.search_master_procedure_templates",
+		params={"search_term": search_term, "limit": limit},
 	)
 
-	items = []
-	for row in rows or []:
-		items.append(
-			{
-				"template_code": row["name"],
-				"template_name": row.get("template") or row["name"],
-				"item": row.get("item") or "",
-				"is_billable": row.get("is_billable", 0),
-				"item_group": row.get("item_group") or "",
-			}
-		)
+	if response is None:
+		frappe.throw("Master instance returned an empty response.")
+
+	if isinstance(response, str):
+		try:
+			response = json.loads(response)
+		except ValueError:
+			response = {}
+
+	data = response or {}
+	items = data.get("items", [])
+	total = data.get("total", len(items))
 
 	_enrich_procedures_with_local(items)
 
-	return {"items": items, "total": len(items)}
+	return {"items": items, "total": total}
 
 
 def _enrich_lab_templates_with_local(items):
