@@ -144,6 +144,9 @@ scheduler_events = {
 		"0 * * * *":[
 			"event_streaming.event_streaming.crons.setup.regularly_sync_essential_doctypes"
 		],
+		"*/15 * * * *":[
+			"event_streaming.event_streaming.crons.setup.run_update_sync"
+		]
 	}
 }
 

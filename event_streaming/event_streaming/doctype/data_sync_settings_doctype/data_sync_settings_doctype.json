@@ -1,0 +1,54 @@
+{
+ "actions": [],
+ "creation": "2026-03-30 12:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "document_type",
+  "insert_sync",
+  "update_sync",
+  "regular_sync"
+ ],
+ "fields": [
+  {
+   "fieldname": "document_type",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Document Type",
+   "reqd": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "insert_sync",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Insert Sync"
+  },
+  {
+   "default": "0",
+   "fieldname": "update_sync",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Update Sync"
+  },
+  {
+   "default": "0",
+   "fieldname": "regular_sync",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Regular Sync"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-03-30 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Event Streaming",
+ "name": "Data Sync Settings Doctype",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
