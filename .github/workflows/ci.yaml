@@ -62,7 +62,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::813389018368:role/GitHubActionsRole
-          aws-region: me-central-1
+          aws-region: us-west-2
 
       # ── Trivy: filesystem vulnerability scan ───────────────────────────
       - name: Trivy Filesystem Scan
