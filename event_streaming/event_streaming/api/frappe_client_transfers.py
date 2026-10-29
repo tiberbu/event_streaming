@@ -258,8 +258,10 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
     frappe.db.commit()
 
 def get_child_table_fields(doctype_name):
-    # taxes / reorder_levels / lab_test_groups are site-specific settings, intentionally not mirrored
-    excluded = ("reorder_levels", "taxes", "lab_test_groups")
+    # taxes / reorder_levels / lab_test_groups / item_defaults are org-specific
+    # settings, intentionally not mirrored (their Company/Warehouse/Account links
+    # don't exist on the target org and would fail the whole insert)
+    excluded = ("reorder_levels", "taxes", "lab_test_groups", "item_defaults")
     return [
         df.fieldname
         for df in frappe.get_meta(doctype_name).get_table_fields()
