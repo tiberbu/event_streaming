@@ -8,6 +8,7 @@ from erpnext.controllers.item_variant import (
 )
 import random
 import string
+import copy
 
 source_client = None
 target_client = None
@@ -233,7 +234,15 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
                 update_data["payment_mechanism"] = source_doc.get("payment_mechanism", "")
 
             for child_field in child_table_fields:
-                update_data[child_field] = clean_child_rows(source_doc.get(child_field))
+                if child_field in ADDITIVE_MERGE_TABLES:
+                    # additive: keep local-only rows, add/update from master
+                    local_doc = target_client.get_doc(doctype, name)
+                    update_data[child_field] = merge_child_table(
+                        local_doc.get(child_field) if local_doc else [],
+                        source_doc.get(child_field),
+                    )
+                else:
+                    update_data[child_field] = clean_child_rows(source_doc.get(child_field))
             # Perform the update
             clean_data = clean_update_data(update_data)
             target_client.update(clean_data)
@@ -281,6 +290,77 @@ def clean_child_rows(rows):
         if isinstance(row, dict):
             cleaned.append({k: v for k, v in row.items() if k not in system_fields and k not in drop_fields})
     return cleaned
+
+
+# child tables synced additively on update. A plain child-table update replaces
+# the whole list with master's rows, which would delete local-only rows (e.g. a
+# locally-maintained "Product Code" Item Attribute Value, or a local template
+# variant attribute) that master does not carry. For these tables we instead
+# add master's rows, refresh the matching local rows, and keep the rest.
+ADDITIVE_MERGE_TABLES = ("item_attribute_values", "attributes")
+
+# per-child-row fields that must not be copied across (Frappe sets/regenerates
+# these); only business/value fields are merged.
+_CHILD_ROW_SYSTEM_FIELDS = (
+    "name", "owner", "creation", "modified", "modified_by",
+    "parent", "parentfield", "parenttype", "idx", "docstatus",
+)
+
+
+def _child_row_key(row, fields):
+    """Stable identity of a child row.
+
+    Item Variant Attribute: unique by ``attribute`` (one row per attribute on a
+    parent; the value may change, so it is not part of the key).
+    Item Attribute Value: unique by ``attribute_value``.
+    """
+    if "attribute" in fields:
+        return ("attribute", row.get("attribute"))
+    if "attribute_value" in fields:
+        return ("attribute_value", row.get("attribute_value"))
+    return tuple(row.get(f) for f in fields)
+
+
+def merge_child_table(local_rows, source_rows):
+    """Additively merge source child rows into local rows (never deletes locals).
+
+    Local rows keep their row `name` so Frappe updates them in place rather than
+    deleting and reinserting; matching source rows refresh the value fields, and
+    source rows with no local match are appended (nameless, so they insert).
+    """
+    row_fields = set()
+    for r in (local_rows or []) + (source_rows or []):
+        if isinstance(r, dict):
+            row_fields |= set(r.keys())
+    value_fields = [f for f in row_fields if f not in _CHILD_ROW_SYSTEM_FIELDS]
+    if not value_fields:
+        return [copy.deepcopy(row) for row in (local_rows or []) if isinstance(row, dict)]
+
+    merged = [copy.deepcopy(row) for row in (local_rows or []) if isinstance(row, dict)]
+    local_by_key = {}
+    for row in merged:
+        local_by_key.setdefault(_child_row_key(row, value_fields), []).append(row)
+
+    for src_row in source_rows or []:
+        if not isinstance(src_row, dict):
+            continue
+        key = _child_row_key(src_row, value_fields)
+        matches = local_by_key.get(key)
+        if matches:
+            target = matches[0]
+            for f in value_fields:
+                # a missing/None value from master means "not provided"; don't
+                # clobber a local value with it
+                src_val = src_row.get(f)
+                if src_val is None or src_val == "":
+                    continue
+                target[f] = src_val
+        else:
+            new_row = {f: src_row.get(f) for f in value_fields}
+            new_row["idx"] = len(merged) + 1
+            merged.append(new_row)
+            local_by_key.setdefault(key, []).append(new_row)
+    return merged
 
 
 def clean_update_data(update_data):
