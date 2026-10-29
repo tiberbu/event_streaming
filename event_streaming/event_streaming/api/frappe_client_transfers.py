@@ -72,7 +72,7 @@ def run_all_syncs(producer_url='https://master.tiberbu.health', action='Update',
         "started": now(),
         "results": {},
     }
-    frappe.cache().set(f"run_all:{run_id}", payload, 24 * 3600)
+    frappe.cache().set_value(f"run_all:{run_id}", payload, expires_in_sec=24 * 3600)
     enqueue(method=_run_all_syncs, queue='long', timeout=21600,
             producer_url=producer_url, action=action, mode=mode, run_id=run_id)
     return {"run_id": run_id}
@@ -80,10 +80,10 @@ def run_all_syncs(producer_url='https://master.tiberbu.health', action='Update',
 
 def _run_all_syncs(producer_url, action, mode, run_id):
     cache_key = f"run_all:{run_id}"
-    state = frappe.cache().get(cache_key) or {"results": {}}
+    state = frappe.cache().get_value(cache_key) or {"results": {}}
     for i, doctype in enumerate(SYNC_DEPENDENCY_ORDER, start=1):
         state.update({"current": i, "current_doctype": doctype})
-        frappe.cache().set(cache_key, state, 24 * 3600)
+        frappe.cache().set_value(cache_key, state, expires_in_sec=24 * 3600)
         started = now()
         try:
             if action == "Sync":
@@ -94,14 +94,14 @@ def _run_all_syncs(producer_url, action, mode, run_id):
         except Exception as e:
             frappe.log_error(f"Run All ({action}) failed for {doctype}: {e}", "Run All Failure")
             state["results"][doctype] = {"status": "Failed", "started": started, "finished": now()}
-        frappe.cache().set(cache_key, state, 24 * 3600)
+        frappe.cache().set_value(cache_key, state, expires_in_sec=24 * 3600)
     state.update({"status": "Completed", "current_doctype": None, "finished": now()})
-    frappe.cache().set(cache_key, state, 24 * 3600)
+    frappe.cache().set_value(cache_key, state, expires_in_sec=24 * 3600)
 
 
 @frappe.whitelist()
 def get_run_all_status(run_id):
-    state = frappe.cache().get(f"run_all:{run_id}")
+    state = frappe.cache().get_value(f"run_all:{run_id}")
     if not state:
         return {"status": "Unknown", "message": "run expired or not found", "results": {}, "total": len(SYNC_DEPENDENCY_ORDER), "current": 0, "current_doctype": None}
     return state
