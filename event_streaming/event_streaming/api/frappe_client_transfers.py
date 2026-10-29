@@ -61,6 +61,7 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
     # print(items_in_source_not_in_target)
     
     try:
+        child_table_fields = get_child_table_fields(doctype)
         batch_size = 1
         limit_start = 0
         num = 0
@@ -77,371 +78,48 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
             docs_to_insert = []
 
             for document in documents_batch:
-                num += 1 
+                num += 1
                 item_name = document.get('name')
-                # .replace("\r", "").replace("\n", " ").strip()
                 print(num, item_name)
-                
+
+                if doctype == 'Item' and item_name in ['IBUPROFEN','Ibuprofen SUSPENSION-60ml','Aceclofenac/Paracetamol/','ALBENDAZOLE','METRONIDAZOLE','ATORVASTATIN CALCIUM','CHLORAMPHENICOL']:
+                    print(f"Skipping problematic Item: {item_name}")
+                    continue
+
                 data = {
                     "doctype": doctype,
                     "docname": item_name
                 }
                 for field in fields:
                     data[field] = document.get(field)
-                # add attribute child table to item
-                if doctype == 'Item':
-                    if item_name in ['IBUPROFEN','Ibuprofen SUSPENSION-60ml','Aceclofenac/Paracetamol/','ALBENDAZOLE','METRONIDAZOLE','ATORVASTATIN CALCIUM','CHLORAMPHENICOL']:
-                        print(f"Skipping problematic Item: {item_name}")
-                        continue
-                    
+
+                if child_table_fields:
                     parent_data = source_client.get_doc(doctype, item_name)
-                    # formatted_ic = parent_data.get('item_code') + ' '  + parent_data.get('item_group')
-                    # print('formatted_ic  ',formatted_ic)
-                    # data['item_code'] = formatted_ic
-                    # attributes
-                    attributes = parent_data.get("attributes", [])
-                    formatted_attributes = [
-                        {"attribute": attr.get("attribute"), "attribute_value": attr.get("attribute_value")}
-                        for attr in attributes
-                    ]
+                    if parent_data:
+                        if doctype in ('Clinical Procedure Template', 'Lab Test Template'):
+                            data['link_existing_item'] = 1
+                            remote_item = parent_data.get('item')
+                            if remote_item:
+                                local_item = target_client.get_doc("Item", remote_item)
+                                if local_item:
+                                    print(f"Item '{local_item}' exists locally.")
+                                else:
+                                    print(f"Item '{remote_item}' DOES NOT exist locally. Creating it...")
+                                    target_client.insert({
+                                        "doctype": "Item",
+                                        "item_code": remote_item,
+                                        "item_name": remote_item,
+                                        "stock_uom": "Unit",
+                                        "item_group": 'Services',
+                                        "is_stock_item": 0,
+                                    })
 
-                    # uoms
-                    uoms = parent_data.get("uoms", [])
-                    formatted_uoms = [
-                        {"uom": uom.get("uom"), "conversion_factor": uom.get("conversion_factor")}
-                        for uom in uoms
-                    ]
+                        if doctype == 'SHA Intervention':
+                            # payment_mechanism is a plain string field, not a child table
+                            data["payment_mechanism"] = parent_data.get("payment_mechanism", "")
 
-                    # custom_terminology_codes
-                    terminology_codes = parent_data.get("custom_terminology_codes", [])
-                    formatted_terminology_codes = [
-                        {"terminology": code.get("terminology"),"link":code.get("link"), "code": code.get("code")}
-                        for code in terminology_codes
-                    ]
-
-                #     formatted_attributes.append( {
-                #     "attribute": 'Unique Code',
-                #     "numeric_values": 0,
-                #     "attribute_value":''.join(random.choices(string.ascii_uppercase + string.digits, k=5)),
-                #     "disabled": 0,
-                #     "from_range": 0.0,
-                #     "increment": 0.0,
-                #     "to_range": 0.0,
-                # })
-                    data["attributes"] = formatted_attributes
-                    data["uoms"] = formatted_uoms
-                    data["custom_terminology_codes"] = formatted_terminology_codes
-                    # data.pop('custom_benefits_exchange_code')
-                    # del data['custom_benefits_exchange_code']
-
-                    
-
-                # add terminology codes childtable
-                if doctype == 'Clinical Procedure Template':
-                    data['link_existing_item'] = 1
-                    parent_data = source_client.get_doc(doctype, document.get("name"))
-
-                    # check if item exists then create it
-                    remote_item = parent_data.get('item')
-                    remote_item_group = parent_data.get('item_group')
-                    
-
-                    if remote_item:
-                        local_item = target_client.get_doc("Item", remote_item)
-                        if local_item:
-                            print(f"Item '{local_item}' exists locally.")
-                        else:
-                            print(f"Item '{remote_item}' DOES NOT exist locally. Creating it...")
-                            target_client.insert({
-                                "doctype": "Item",
-                                "item_code": remote_item,
-                                "item_name": remote_item,
-                                "stock_uom": "Unit",
-                                "item_group": 'Services',
-                                "is_stock_item":0,
-                            })
-
-                            
-                    # custom_terminology_codes
-                    terminology_codes = parent_data.get("custom_terminology_codes", [])
-                    formatted_terminology_codes = [
-                        {"terminology": code.get("terminology"),"link":code.get("link"), "code": code.get("code")}
-                        for code in terminology_codes
-                    ]
-
-                    # codification_table
-                    codifications = parent_data.get("codification_table", [])
-                    formatted_codifications = [
-                        {"code": code.get("code"),"code_system":code.get("code_system"), "code_value": code.get("code_value"),
-                         "definition": code.get("definition"),"system": code.get("system"),"oid": code.get("oid")}
-                        for code in codifications
-                    ]
-
-                    # custom_pre_auth_configuration
-                    pre_auth_configurations = parent_data.get("custom_pre_auth_configuration", [])
-                    formatted_pre_auth_configurations = [
-                        {"facility_level": code.get("facility_level"),"requires_pre_auth":code.get("requires_pre_auth"), "scheme": code.get("scheme")}
-                        for code in pre_auth_configurations
-                    ]
-
-                    # custom_interventions_configuration
-                    interventions_configuration = parent_data.get("custom_interventions_configuration", [])
-                    formatted_interventions_configuration = [
-                        {"intervention_code": code.get("intervention_code"),"sha_intervention":code.get("sha_intervention"),
-                         "speciality_intervention": code.get("speciality_intervention"),"speciality_intervention_type": code.get("speciality_intervention_type")}
-                        for code in interventions_configuration
-                    ]
-
-                    data["custom_terminology_codes"] = formatted_terminology_codes
-                    data["codification_table"] = formatted_codifications
-                    data["custom_pre_auth_configuration"] = formatted_pre_auth_configurations
-                    data["custom_interventions_configuration"] = formatted_interventions_configuration
-
-                if doctype == 'Lab Test Template':
-                    data['link_existing_item'] = 1
-                    parent_data = source_client.get_doc(doctype, document.get("name"))
-                    
-                    # check if item exists then create it
-                    remote_item = parent_data.get('item')
-                    remote_item_group = parent_data.get('item_group')
-                    
-
-                    if remote_item:
-                        local_item = target_client.get_doc("Item", remote_item)
-                        if local_item:
-                            print(f"Item '{local_item}' exists locally.")
-                        else:
-                            print(f"Item '{remote_item}' DOES NOT exist locally. Creating it...")
-                            target_client.insert({
-                                "doctype": "Item",
-                                "item_code": remote_item,
-                                "item_name": remote_item,
-                                "stock_uom": "Unit",
-                                "item_group": 'Services',
-                                "is_stock_item":0,
-                            })
-
-                    # custom_terminology_codes
-                    terminology_codes = parent_data.get("custom_terminology_codes", [])
-                    formatted_terminology_codes = [
-                        {"terminology": code.get("terminology"),"link":code.get("link"), "code": code.get("code")}
-                        for code in terminology_codes
-                    ]
-
-                    # codification_table
-                    codifications = parent_data.get("codification_table", [])
-                    formatted_codifications = [
-                        {"code": code.get("code"),"code_system":code.get("code_system"), "code_value": code.get("code_value"),
-                         "definition": code.get("definition"),"system": code.get("system"),"oid": code.get("oid")}
-                        for code in codifications
-                    ]
-
-                    # normal_test_templates
-                    test_templates = parent_data.get("normal_test_templates", [])
-                    formatted_normal_test_templates = [
-                        {"lab_test_event": template.get("lab_test_event"),"lab_test_uom": template.get("lab_test_uom"),
-                         "normal_range":template.get("normal_range"),"custom_dictionary_concept":template.get("custom_dictionary_concept"), "secondary_uom": template.get("secondary_uom"),
-                         "allow_blank": template.get("allow_blank"),"conversion_factor": template.get("conversion_factor")}
-                        for template in test_templates
-                    ]
-
-                    # descriptive_test_templates
-                    desc_test_templates = parent_data.get("descriptive_test_templates", [])
-                    formatted_descriptive_test_templates = [
-                        {"particulars": template.get("particulars"),
-                         "allow_blank": template.get("allow_blank")}
-                        for template in desc_test_templates
-                    ]
-
-                    # custom_items
-                    c_items = parent_data.get("custom_items", [])
-                    formatted_custom_items = [
-                        {"actual_qty": item.get("actual_qty"),"barcode": item.get("barcode"),"batch_no": item.get("batch_no"),
-                         "conversion_factor": item.get("conversion_factor"),"invoice_separately_as_consumables": item.get("invoice_separately_as_consumables"),
-                         "item_code": item.get("item_code"),"item_name": item.get("item_name"),
-                         "qty": item.get("qty"),"stock_uom": item.get("stock_uom"),
-                         "transfer_qty": item.get("transfer_qty"),"uom": item.get("uom")}
-                        for item in c_items
-                    ]
-
-                    # custom_results_implications
-                    results_implications = parent_data.get("custom_results_implications", [])
-                    formatted_results_implications = [
-                        {"lab_results_implications": implication.get("lab_results_implications")}
-                        for implication in results_implications]
-
-                    data["custom_terminology_codes"] = formatted_terminology_codes
-                    data["codification_table"] = formatted_codifications
-                    data["normal_test_templates"] = formatted_normal_test_templates
-                    data["descriptive_test_templates"] = formatted_descriptive_test_templates
-                    data["custom_items"] = formatted_custom_items
-                    data["custom_results_implications"] = formatted_results_implications
-
-                if doctype == 'Item Attribute':
-                    parent_data = source_client.get_doc(doctype, document.get("name"))
-
-                    # item_attribute_values
-                    attribute_values = parent_data.get("item_attribute_values", [])
-                    formatted_attribute_values = [
-                        {"abbr": attr.get("abbr"),"attribute_value": attr.get("attribute_value")}
-                        for attr in attribute_values
-                    ]
-                    data["item_attribute_values"] = formatted_attribute_values
-
-                if doctype == 'SHA Intervention':
-                    parent_data = source_client.get_doc(doctype, document.get("name"))
-
-                    # payment_mechanism is a plain string field, not a child table
-                    data["payment_mechanism"] = parent_data.get("payment_mechanism", "")
-
-                if doctype == 'Role Profile':
-                    parent_data = source_client.get_doc(doctype, document.get("name"))
-
-                    # roles
-                    roles = parent_data.get("roles", [])
-                    formatted_roles = [
-                        {"role": role.get("role")}
-                        for role in roles
-                    ]
-                    data["roles"] = formatted_roles
-
-                if doctype == 'Workflow':
-                    parent_data = source_client.get_doc(doctype, document.get("name"))
-
-                    # states
-                    states = parent_data.get("states", [])
-                    formatted_states = [
-                        {"allow_edit": state.get("allow_edit"),"avoid_status_override": state.get("avoid_status_override"),
-                         "doc_status": state.get("doc_status"),"docstatus": state.get("docstatus"),
-                         "send_email": state.get("send_email"),"state": state.get("state")}
-                        for state in states
-                    ]
-                    data["states"] = formatted_states
-
-                    # transitions
-                    transitions = parent_data.get("transitions", [])
-                    formatted_transitions = [
-                        {
-                            "action": transition.get("action"),
-                            "allow_self_approval": transition.get("allow_self_approval"),
-                            "allowed": transition.get("allowed"),
-                            "docstatus": transition.get("docstatus"),
-                            "next_state": transition.get("next_state"),
-                            "send_email_to_creator": transition.get("send_email_to_creator"),
-                            "state": transition.get("state"),
-                        }
-                        for transition in transitions
-                    ]
-                    data["transitions"] = formatted_transitions
-                
-                if doctype == 'Health Program Workflow':
-                    parent_data = source_client.get_doc(doctype, document.get("name"))
-
-                    # workflow_state_transitions
-                    transitions = parent_data.get("workflow_state_transitions", [])
-                    formatted_transitions = [
-                        {"entry_point": transition.get("entry_point"),"state": transition.get("state"),
-                        "next_state": transition.get("next_state")}
-                        for transition in transitions
-                    ]
-                    data["workflow_state_transitions"] = formatted_transitions
-
-                if doctype == 'Description Reports Mapping':
-                    parent_data = source_client.get_doc(doctype, document.get("name"))
-
-                    # table_multiselect_gavr (ICD11 Multiselect)
-                    icd11_multiselect = parent_data.get("table_multiselect_gavr", [])
-                    formatted_icd11_multiselect = [
-                        {
-                            "icd11_explanation": row.get("icd11_explanation")
-                        }
-                        for row in icd11_multiselect
-                    ]
-
-                    # clinical_procedure_template
-                    clinical_procedures = parent_data.get("clinical_procedure_template", [])
-                    formatted_clinical_procedures = [
-                        {
-                            "clinical_procedure_template": row.get("clinical_procedure_template")
-                        }
-                        for row in clinical_procedures
-                    ]
-
-                    # xray_and_imaging
-                    imaging_procedures = parent_data.get("xray_and_imaging", [])
-                    formatted_imaging_procedures = [
-                        {
-                            "clinical_procedure_template": row.get("clinical_procedure_template")
-                        }
-                        for row in imaging_procedures
-                    ]
-
-                    # table_gtuk (labs)
-                    lab_tests = parent_data.get("table_gtuk", [])
-                    formatted_lab_tests = [
-                        {
-                            "lab_test_template": row.get("lab_test_template")
-                        }
-                        for row in lab_tests
-                    ]
-
-                    # table_itgx (special clinics)
-                    special_clinics = parent_data.get("table_itgx", [])
-                    formatted_special_clinics = [
-                        {
-                            "facility": row.get("facility"),
-                            "service_unit": row.get("service_unit")
-                        }
-                        for row in special_clinics
-                    ]
-
-                    # forms
-                    form_templates = parent_data.get("forms", [])
-                    formatted_form_templates = [
-                        {
-                            "form_dictionary_concept": row.get("form_dictionary_concept")
-                        }
-                        for row in form_templates
-                    ]
-
-                    data["table_multiselect_gavr"] = formatted_icd11_multiselect
-                    data["clinical_procedure_template"] = formatted_clinical_procedures
-                    data["xray_and_imaging"] = formatted_imaging_procedures
-                    data["table_gtuk"] = formatted_lab_tests
-                    data["table_itgx"] = formatted_special_clinics
-                    data["forms"] = formatted_form_templates
-
-                if doctype == 'ICD11 Collection':
-                    parent_data = source_client.get_doc(doctype, document.get("name"))
-
-                    expanded_codes = parent_data.get("expanded_codes", [])
-                    formatted_codes = [
-                        {
-                            "code": row.get("code"),
-                            "description": row.get("description"),
-                            "sex": row.get("sex"),
-                            "min_age": row.get("min_age"),
-                            "max_age": row.get("max_age"),
-                            "program_area": row.get("program_area"),
-                            "fp_method": row.get("fp_method"),
-                        }
-                        for row in expanded_codes
-                    ]
-                    data["expanded_codes"] = formatted_codes
-
-                if doctype == 'Prescription Dosage':
-                    parent_data = source_client.get_doc(doctype, document.get("name"))
-
-                    expanded_codes = parent_data.get("dosage_strength", [])
-                    formatted_codes = [
-                        {
-                            "strength": row.get("strength"),
-                            "strength_time": row.get("strength_time"),
-                        }
-                        for row in expanded_codes
-                    ]
-                    data["dosage_strength"] = formatted_codes
-                
+                        for child_field in child_table_fields:
+                            data[child_field] = clean_child_rows(parent_data.get(child_field))
 
                 print('add to insert ',data.get('name'))
                 # if doctype == 'Item' and frappe.db.exists('Item',{'name':data.get('name')}):
@@ -454,20 +132,12 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
             if docs_to_insert:
                 print("Beginning bulk insert")
                 try:
-                    # args = {}
-                    # for i, d in enumerate(data['attributes']):
-                    #     d['idx']= i + 1
-                    #     args[d['attribute']] = d['attribute_value']
-
-                    # variant = get_variant(data['variant_of'], args, data['item_code'])
-                    # if not variant:
                     target_client.insert_many(docs_to_insert)
                     print(f"{len(docs_to_insert)} documents successfully inserted.")
                 except Exception as insert_exception:
-                    frappe.throw(f"Insert failed: {insert_exception}")
-                    # print(f"Insert failed: {insert_exception}")
-                # finally:
-                #     continue
+                    failed_name = docs_to_insert[0].get("name")
+                    print(f"Insert failed for {failed_name}: {insert_exception}")
+                    frappe.log_error(f"Insert failed for {doctype}/{failed_name}: {insert_exception}", "Sync Insert Failure")
 
             limit_start += batch_size
         
@@ -527,11 +197,14 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
     progress.insert(ignore_permissions=True)
     frappe.db.commit()
     
+    child_table_fields = get_child_table_fields(doctype)
     num=0
     # return
     for name in common_names:
         try:
             source_doc = source_client.get_doc(doctype, name)
+            if not source_doc:
+                raise RuntimeError(f"Source document {doctype}/{name} not found on master")
             update_data = {
                 "doctype": doctype,
                 "name": name,
@@ -540,172 +213,27 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
             for field in fields:
                 update_data[field] = source_doc.get(field)
 
+            if doctype in ('Clinical Procedure Template', 'Lab Test Template'):
+                remote_item = source_doc.get('item')
+                if remote_item:
+                    local_item = target_client.get_doc("Item", remote_item)
+                    if not local_item:
+                        print(f"Item '{remote_item}' DOES NOT exist locally. Creating it...")
+                        target_client.insert({
+                            "doctype": "Item",
+                            "item_code": remote_item,
+                            "item_name": remote_item,
+                            "stock_uom": "Unit",
+                            "item_group": 'Services',
+                            "is_stock_item": 0,
+                        })
 
-            if doctype == 'Lab Test Template':
-                parent_data = source_client.get_doc(doctype, name)
+            if doctype == 'SHA Intervention':
+                # payment_mechanism is a plain string field, not a child table
+                update_data["payment_mechanism"] = source_doc.get("payment_mechanism", "")
 
-                # custom_terminology_codes
-                terminology_codes = parent_data.get("custom_terminology_codes", [])
-                formatted_terminology_codes = [
-                    {"terminology": code.get("terminology"),"link":code.get("link"), "code": code.get("code")}
-                    for code in terminology_codes
-                ]
-
-                # codification_table
-                codifications = parent_data.get("codification_table", [])
-                formatted_codifications = [
-                    {"code": code.get("code"),"code_system":code.get("code_system"), "code_value": code.get("code_value"),
-                        "definition": code.get("definition"),"system": code.get("system"),"oid": code.get("oid")}
-                    for code in codifications
-                ]
-
-                # normal_test_templates
-                test_templates = parent_data.get("normal_test_templates", [])
-                formatted_normal_test_templates = [
-                    {"lab_test_event": template.get("lab_test_event"),"lab_test_uom": template.get("lab_test_uom"),
-                        "normal_range":template.get("normal_range"),"custom_dictionary_concept":template.get("custom_dictionary_concept"),"secondary_uom": template.get("secondary_uom"),
-                        "allow_blank": template.get("allow_blank"),"conversion_factor": template.get("conversion_factor")}
-                    for template in test_templates
-                ]
-
-                # descriptive_test_templates
-                desc_test_templates = parent_data.get("descriptive_test_templates", [])
-                formatted_descriptive_test_templates = [
-                    {"particulars": template.get("particulars"),
-                        "allow_blank": template.get("allow_blank")}
-                    for template in desc_test_templates
-                ]
-
-                # custom_items
-                c_items = parent_data.get("custom_items", [])
-                formatted_custom_items = [
-                    {"actual_qty": item.get("actual_qty"),"barcode": item.get("barcode"),"batch_no": item.get("batch_no"),
-                        "conversion_factor": item.get("conversion_factor"),"invoice_separately_as_consumables": item.get("invoice_separately_as_consumables"),
-                        "item_code": item.get("item_code"),"item_name": item.get("item_name"),
-                        "qty": item.get("qty"),"stock_uom": item.get("stock_uom"),
-                        "transfer_qty": item.get("transfer_qty"),"uom": item.get("uom")}
-                    for item in c_items
-                ]
-
-                # custom_results_implications
-                results_implications = parent_data.get("custom_results_implications", [])
-                formatted_results_implications = [
-                    {"lab_results_implications": implication.get("lab_results_implications")}
-                    for implication in results_implications]
-
-                update_data["custom_terminology_codes"] = formatted_terminology_codes
-                update_data["codification_table"] = formatted_codifications
-                update_data["normal_test_templates"] = formatted_normal_test_templates
-                update_data["descriptive_test_templates"] = formatted_descriptive_test_templates
-                update_data["custom_items"] = formatted_custom_items
-                update_data["custom_results_implications"] = formatted_results_implications
-
-            if doctype == 'ICD11 Collection':
-                parent_data = source_client.get_doc(doctype, name)
-
-                expanded_codes = parent_data.get("expanded_codes", [])
-                formatted_codes = [
-                    {
-                        "code": row.get("code"),
-                        "description": row.get("description"),
-                        "sex": row.get("sex"),
-                        "min_age": row.get("min_age"),
-                        "max_age": row.get("max_age"),
-                        "program_area": row.get("program_area"),
-                        "fp_method": row.get("fp_method"),
-                    }
-                    for row in expanded_codes
-                ]
-                update_data["expanded_codes"] = formatted_codes
-                
-            if doctype == 'Prescription Dosage':
-                parent_data = source_client.get_doc(doctype, name)
-
-                expanded_codes = parent_data.get("dosage_strength", [])
-                formatted_codes = [
-                    {
-                        "strength": row.get("strength"),
-                        "strength_time": row.get("strength_time"),
-                    }
-                    for row in expanded_codes
-                ]
-                update_data["dosage_strength"] = formatted_codes
-
-            if doctype == 'Description Reports Mapping':
-                parent_data = source_client.get_doc(doctype,name)
-
-                # table_multiselect_gavr (ICD11 Multiselect)
-                icd11_multiselect = parent_data.get("table_multiselect_gavr", [])
-                formatted_icd11_multiselect = [
-                    {
-                        "icd11_explanation": row.get("icd11_explanation")
-                    }
-                    for row in icd11_multiselect
-                ]
-
-                # clinical_procedure_template
-                clinical_procedures = parent_data.get("clinical_procedure_template", [])
-                formatted_clinical_procedures = [
-                    {
-                        "clinical_procedure_template": row.get("clinical_procedure_template")
-                    }
-                    for row in clinical_procedures
-                ]
-
-                # xray_and_imaging
-                imaging_procedures = parent_data.get("xray_and_imaging", [])
-                formatted_imaging_procedures = [
-                    {
-                        "clinical_procedure_template": row.get("clinical_procedure_template")
-                    }
-                    for row in imaging_procedures
-                ]
-
-                # table_gtuk (labs)
-                lab_tests = parent_data.get("table_gtuk", [])
-                formatted_lab_tests = [
-                    {
-                        "lab_test_template": row.get("lab_test_template")
-                    }
-                    for row in lab_tests
-                ]
-
-                # table_itgx (special clinics)
-                special_clinics = parent_data.get("table_itgx", [])
-                formatted_special_clinics = [
-                    {
-                        "facility": row.get("facility"),
-                        "service_unit": row.get("service_unit")
-                    }
-                    for row in special_clinics
-                ]
-
-                # forms
-                form_templates = parent_data.get("forms", [])
-                formatted_form_templates = [
-                    {
-                        "form_dictionary_concept": row.get("form_dictionary_concept")
-                    }
-                    for row in form_templates
-                ]
-
-                update_data["table_multiselect_gavr"] = formatted_icd11_multiselect
-                update_data["clinical_procedure_template"] = formatted_clinical_procedures
-                update_data["xray_and_imaging"] = formatted_imaging_procedures
-                update_data["table_gtuk"] = formatted_lab_tests
-                update_data["table_itgx"] = formatted_special_clinics
-                update_data["forms"] = formatted_form_templates
-            
-            if doctype == 'Item Attribute':
-                parent_data = source_client.get_doc(doctype,name)
-                
-                # item_attribute_values
-                attribute_values = parent_data.get("item_attribute_values", [])
-                formatted_attribute_values = [
-                    {"abbr": attr.get("abbr"),"attribute_value": attr.get("attribute_value")}
-                    for attr in attribute_values
-                ]
-                update_data["item_attribute_values"] = formatted_attribute_values
+            for child_field in child_table_fields:
+                update_data[child_field] = clean_child_rows(source_doc.get(child_field))
             # Perform the update
             clean_data = clean_update_data(update_data)
             target_client.update(clean_data)
@@ -728,6 +256,25 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
     progress.status = "Completed"
     progress.save(ignore_permissions=True)
     frappe.db.commit()
+
+def get_child_table_fields(doctype_name):
+    # taxes / reorder_levels / lab_test_groups are site-specific settings, intentionally not mirrored
+    excluded = ("reorder_levels", "taxes", "lab_test_groups")
+    return [
+        df.fieldname
+        for df in frappe.get_meta(doctype_name).get_table_fields()
+        if df.fieldname not in excluded
+    ]
+
+
+def clean_child_rows(rows):
+    system_fields = ("name", "owner", "creation", "modified", "modified_by", "parent", "parentfield", "parenttype", "idx")
+    cleaned = []
+    for row in rows or []:
+        if isinstance(row, dict):
+            cleaned.append({k: v for k, v in row.items() if k not in system_fields})
+    return cleaned
+
 
 def clean_update_data(update_data):
     # Remove fields that cannot be updated
@@ -859,21 +406,15 @@ def get_sync_status(producer_url='https://master.tiberbu.health', doctype='Queue
     # ----------------------------
     clients = get_source_and_target_frappe_client_obj(producer_url)
     source_client = clients.get('source_client')
-    target_client = clients.get('target_client')
 
     source_count = len(source_client.get_list(
         doctype_query,
         fields=["name"],
         filters=filters,
-        limit_page_length=50000
+        limit_page_length=999999
     ))
 
-    target_count = len(target_client.get_list(
-        doctype_query,
-        fields=["name"],
-        filters=target_filters,
-        limit_page_length=50000
-    ))
+    target_count = int(frappe.db.count(doctype_query, filters=target_filters))
 
     percentage = (target_count / source_count * 100) if source_count != 0 else 0
 

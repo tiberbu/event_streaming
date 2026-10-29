@@ -8,7 +8,7 @@ def run_instance_setup(snooping=False):
     doctypes =['Queue State Status','Item Group','UOM','SHA Intervention','Item Attribute','Item Alternative','Item','Labs And Procedures Items','Healthcare Service Unit Type','Medical Department','SHA Benefit Package',
                'Clinical Procedure Template','Lab Test UOM','Concept FormKey Controls','Dictionary Concept','Lab Results Implications','Lab Test Template','Prescription Dosage','Dosage Form',
                'Health Program','Health Program Workflow','Health Program Field Mapping','Workflow','Signs And Symptoms',
-               'ICD11 Collection','Description Reports Mapping']
+               'ICD11 Collection','Description Reports Mapping','Sample Type','Lab Test Sample']
     master_url = "https://master.tiberbu.health"
     
     # check status of the last doctype (Description Reports Mapping)
