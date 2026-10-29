@@ -271,10 +271,15 @@ def get_child_table_fields(doctype_name):
 
 def clean_child_rows(rows):
     system_fields = ("name", "owner", "creation", "modified", "modified_by", "parent", "parentfield", "parenttype", "idx")
+    # Item Variant Attribute.variant_of is a Link -> Item that master populates with
+    # base-ingredient items (e.g. NYSTATIN) that are not synced to the target org,
+    # so mirroring it makes every insert fail with LinkValidationError. The target
+    # item's variant_of is already set on the parent, so this child field is dropped.
+    drop_fields = ("variant_of",)
     cleaned = []
     for row in rows or []:
         if isinstance(row, dict):
-            cleaned.append({k: v for k, v in row.items() if k not in system_fields})
+            cleaned.append({k: v for k, v in row.items() if k not in system_fields and k not in drop_fields})
     return cleaned
 
 
