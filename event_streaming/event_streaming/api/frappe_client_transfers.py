@@ -336,6 +336,19 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
                 # payment_mechanism is a plain string field, not a child table
                 update_data["payment_mechanism"] = source_doc.get("payment_mechanism", "")
 
+            # NestedSet doctypes (Item Group, ...): the parent's is_group and
+            # the lft/rgt tree bookkeeping must stay in sync with the children
+            # that ACTUALLY exist on this server. Master may have the same node
+            # as a leaf (is_group=0) with different lft/rgt, and copying that
+            # over a node that has children locally fails NestedSet
+            # validate_ledger ("cannot be a leaf node as it has children").
+            meta = frappe.get_meta(doctype)
+            if getattr(meta, "nsm_parent_field", None):
+                has_children = bool(frappe.db.count(doctype, {meta.nsm_parent_field: name}))
+                update_data["is_group"] = 1 if has_children else (source_doc.get("is_group") or 0)
+                for tree_field in ("lft", "rgt", "old_parent"):
+                    update_data.pop(tree_field, None)
+
             local_doc = None
             for child_field in child_table_fields:
                 if mode == "Merge":
