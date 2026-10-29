@@ -315,12 +315,16 @@ def _child_row_key(row, fields):
 
     Item Variant Attribute: unique by ``attribute`` (one row per attribute on a
     parent; the value may change, so it is not part of the key).
-    Item Attribute Value: unique by ``attribute_value``.
+    Item Attribute Value: unique by ``attribute_value``. Frappe enforces
+    uniqueness case-insensitively (Item Attribute.validate_duplication), so the
+    key is lowercased too — otherwise the merge would keep a local row AND add
+    a master row that differ only by case, which fails that same validation.
     """
     if "attribute" in fields:
         return ("attribute", row.get("attribute"))
     if "attribute_value" in fields:
-        return ("attribute_value", row.get("attribute_value"))
+        value = row.get("attribute_value")
+        return ("attribute_value", str(value).lower() if value is not None else None)
     return tuple(row.get(f) for f in fields)
 
 
