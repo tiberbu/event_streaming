@@ -40,8 +40,9 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
         doctype = "Item"
         filters = {"is_stock_item": 0,"disabled":0}
 
-    fields = get_doctype_fields(doctype)
-    # print(fields)
+    # fields that exist on BOTH servers (a field missing on the queried server
+    # raises UnknownColumn and kills the whole sync)
+    fields = get_sync_fields(source_client, target_client, doctype)
     if 'custom_benefits_exchange_code' in fields:
         fields.remove('custom_benefits_exchange_code')
 
@@ -172,7 +173,9 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
         doctype = "Item"
         filters = {"is_stock_item": 0,"disabled":0}
 
-    fields = get_doctype_fields(doctype)
+    # fields that exist on BOTH servers (a field missing on the queried server
+    # raises UnknownColumn and kills the whole sync)
+    fields = get_sync_fields(source_client, target_client, doctype)
 
     source_list = source_client.get_list(doctype, fields=["name"], limit_page_length=50000, filters=filters)
     target_list = target_client.get_list(doctype, fields=["name"], limit_page_length=50000, filters=filters)
@@ -376,19 +379,53 @@ def get_doctype_fields(doctype_name='Clinical Procedure Template'):
     field_list = [
             field.fieldname
             for field in meta.fields
-            if field.fieldtype not in ["Column Break", "Section Break", "HTML", "Button", "Read Only", 
+            if field.fieldtype not in ["Column Break", "Section Break", "HTML", "Button", "Read Only",
             "Fold", "Tab Break", "Image", "Geolocation", "Color","Table"]
         ]
     system_fields = ["name", "owner", "creation", "modified", "modified_by", "idx", "docstatus"]
-        
+
     if meta.istable:
         system_fields.extend(["parent", "parentfield", "parenttype"])
-        
+
     all_fields = field_list + system_fields
     final_fields = [item for item in all_fields if item not in ["remote_docname", "remote_site_name","reorder_levels","taxes","attributes","lab_test_groups"]]
     # print(final_fields)
     # print(len(final_fields))
     return(final_fields)
+
+
+def get_remote_doctype_fields(client, doctype_name):
+    """Fieldnames of `doctype_name` as defined on the server `client` points to."""
+    meta = client.get_doc("DocType", doctype_name)
+    return [d.get("fieldname") for d in meta.get("fields", []) if d.get("fieldname")]
+
+
+def get_sync_fields(source_client, target_client, doctype_name):
+    """Fields that exist on BOTH source and target servers.
+
+    Queries with a field that is missing on the queried server raise
+    UnknownColumn errors, so only the intersection may be used. Ordering follows
+    the target meta.
+    """
+    target_fields = get_doctype_fields(doctype_name)
+    try:
+        source_fields = set(get_remote_doctype_fields(source_client, doctype_name))
+    except Exception as e:
+        # if the DocType or its meta is unreachable, fail loudly with context
+        raise RuntimeError(f"Could not read DocType {doctype_name} meta from source: {e}")
+    if not source_fields:
+        raise RuntimeError(f"DocType {doctype_name} has no fields on the source server")
+    # standard Frappe system fields exist on every DocType; the DocType meta
+    # `fields` list does not include them, so add them back explicitly
+    system_fields = {
+        "name", "owner", "creation", "modified", "modified_by", "idx",
+        "docstatus", "parent", "parentfield", "parenttype",
+    }
+    source_fields |= system_fields
+    common = [f for f in target_fields if f in source_fields]
+    if not common:
+        raise RuntimeError(f"No common fields between source and target for {doctype_name}")
+    return common
 
 def get_source_and_target_frappe_client_obj(producer_url):
     producer_doc = frappe.get_doc("Event Producer", producer_url)
@@ -406,8 +443,12 @@ def get_user_api_key(user):
 
 def get_host_name():
     site_config = frappe.local.conf
-    host_name = site_config.get('hostname', 'default_host_name')    
-    return host_name
+    for key in ("app_url", "hostname", "host_name"):
+        value = site_config.get(key)
+        if value:
+            return value
+    port = site_config.get("webserver_port") or 8000
+    return f"http://{frappe.local.site}:{port}"
 
 
 #  bench execute event_streaming.event_streaming.api.frappe_client_transfers.get_sync_status
