@@ -343,8 +343,9 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
             # over a node that has children locally fails NestedSet
             # validate_ledger ("cannot be a leaf node as it has children").
             meta = frappe.get_meta(doctype)
-            if getattr(meta, "nsm_parent_field", None):
-                has_children = bool(frappe.db.count(doctype, {meta.nsm_parent_field: name}))
+            parent_field = getattr(meta, "nsm_parent_field", None)
+            if parent_field and "is_group" in update_data:
+                has_children = bool(frappe.db.count(doctype, {parent_field: name}))
                 update_data["is_group"] = 1 if has_children else (source_doc.get("is_group") or 0)
                 for tree_field in ("lft", "rgt", "old_parent"):
                     update_data.pop(tree_field, None)
