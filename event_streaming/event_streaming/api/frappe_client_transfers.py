@@ -149,10 +149,16 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
 
 # bench execute event_streaming.event_streaming.api.frappe_client_transfers.update_existing_records
 @frappe.whitelist()
-def update_existing_records(producer_url='https://master.tiberbu.health',doctype='Item Attribute'):
+def update_existing_records(producer_url='https://master.tiberbu.health',doctype='Item Attribute',mode='Merge'):
     clients = get_source_and_target_frappe_client_obj(producer_url)
     source_client = clients.get("source_client")
     target_client = clients.get("target_client")
+
+    # 'Merge' (default): additive merge of child tables (keep local-only rows,
+    # consolidate case-duplicates). 'Mirror': full replacement (old behavior) —
+    # master's child rows replace the local ones exactly.
+    if mode not in ("Merge", "Mirror"):
+        mode = "Merge"
 
     # is_procedure_template is_xray_and_imaging 'is_diagnosis':1
     filters = {}
@@ -236,15 +242,18 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
                 # payment_mechanism is a plain string field, not a child table
                 update_data["payment_mechanism"] = source_doc.get("payment_mechanism", "")
 
+            local_doc = None
             for child_field in child_table_fields:
-                if child_field in ADDITIVE_MERGE_TABLES:
+                if mode == "Merge":
                     # additive: keep local-only rows, add/update from master
-                    local_doc = target_client.get_doc(doctype, name)
+                    if local_doc is None:
+                        local_doc = target_client.get_doc(doctype, name)
                     update_data[child_field] = merge_child_table(
                         local_doc.get(child_field) if local_doc else [],
                         source_doc.get(child_field),
                     )
                 else:
+                    # Mirror: replace local child rows with master's exactly
                     update_data[child_field] = clean_child_rows(source_doc.get(child_field))
             # Perform the update
             clean_data = clean_update_data(update_data)
@@ -295,13 +304,6 @@ def clean_child_rows(rows):
     return cleaned
 
 
-# child tables synced additively on update. A plain child-table update replaces
-# the whole list with master's rows, which would delete local-only rows (e.g. a
-# locally-maintained "Product Code" Item Attribute Value, or a local template
-# variant attribute) that master does not carry. For these tables we instead
-# add master's rows, refresh the matching local rows, and keep the rest.
-ADDITIVE_MERGE_TABLES = ("item_attribute_values", "attributes")
-
 # per-child-row fields that must not be copied across (Frappe sets/regenerates
 # these); only business/value fields are merged.
 _CHILD_ROW_SYSTEM_FIELDS = (
@@ -328,12 +330,25 @@ def _child_row_key(row, fields):
     return tuple(row.get(f) for f in fields)
 
 
-def merge_child_table(local_rows, source_rows):
-    """Additively merge source child rows into local rows (never deletes locals).
+def _pick_canonical_row(rows):
+    """Row to keep among local rows that differ only by case: the oldest one
+    (by creation, then idx, then position)."""
+    def sort_key(pair):
+        i, row = pair
+        return (row.get("creation") or "", row.get("idx") or 0, i)
+    return min(enumerate(rows), key=sort_key)[1]
 
-    Local rows keep their row `name` so Frappe updates them in place rather than
-    deleting and reinserting; matching source rows refresh the value fields, and
-    source rows with no local match are appended (nameless, so they insert).
+
+def merge_child_table(local_rows, source_rows):
+    """Additively merge source child rows into local rows.
+
+    - a local row matching a source row is updated in place (its `name` is
+      preserved, so Frappe updates rather than delete+reinsert);
+    - source rows with no local match are appended (nameless, so they insert);
+    - local rows that differ from each other only by case are consolidated:
+      the oldest row survives (converged to the source casing) and the extras
+      are dropped, because Frappe validates these child rows case-insensitively
+      and a case-duplicate pair fails the whole document save.
     """
     row_fields = set()
     for r in (local_rows or []) + (source_rows or []):
@@ -348,26 +363,42 @@ def merge_child_table(local_rows, source_rows):
     for row in merged:
         local_by_key.setdefault(_child_row_key(row, value_fields), []).append(row)
 
+    drop_ids = set()
     for src_row in source_rows or []:
         if not isinstance(src_row, dict):
             continue
         key = _child_row_key(src_row, value_fields)
-        matches = local_by_key.get(key)
-        if matches:
-            target = matches[0]
+        group = local_by_key.get(key)
+        if group:
+            keep = _pick_canonical_row(group)
             for f in value_fields:
                 # a missing/None value from master means "not provided"; don't
                 # clobber a local value with it
                 src_val = src_row.get(f)
                 if src_val is None or src_val == "":
                     continue
-                target[f] = src_val
+                keep[f] = src_val
+            for extra in group:
+                if extra is not keep:
+                    drop_ids.add(id(extra))
         else:
             new_row = {f: src_row.get(f) for f in value_fields}
-            new_row["idx"] = len(merged) + 1
             merged.append(new_row)
             local_by_key.setdefault(key, []).append(new_row)
-    return merged
+
+    # case-duplicate local rows that master has no row for: keep the oldest,
+    # drop the rest (a self-duplicate fails the same case-insensitive check)
+    for group in local_by_key.values():
+        if len(group) > 1:
+            keep = _pick_canonical_row(group)
+            for extra in group:
+                if extra is not keep:
+                    drop_ids.add(id(extra))
+
+    kept = [row for row in merged if id(row) not in drop_ids]
+    for i, row in enumerate(kept):
+        row["idx"] = i + 1
+    return kept
 
 
 def clean_update_data(update_data):
