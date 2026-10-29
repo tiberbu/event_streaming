@@ -13,6 +13,100 @@ import copy
 source_client = None
 target_client = None
 
+# Registered sync doctypes in dependency order (parents before children):
+# UOM before Item (stock_uom); Item Group before Item; Item Attribute +
+# Item Alternative before Item (variants reference attribute values);
+# SHA Intervention before Item; Item before Lab Test/Clinical Procedure
+# Templates (they link Items); ICD11/Dictionary before Workflow/Health Program
+# (they reference those concepts); Health Program before its Workflow/Field
+# Mappings. Future doctypes: append here and to the page's doctypes array.
+SYNC_DEPENDENCY_ORDER = [
+    'Queue State Status',
+    'UOM',
+    'Item Group',
+    'Item Attribute',
+    'SHA Intervention',
+    'Item Alternative',
+    'Item',
+    'Labs And Procedures Items',
+    'Healthcare Service Unit Type',
+    'Medical Department',
+    'SHA Benefit Package',
+    'Prescription Dosage',
+    'Dosage Form',
+    'Sample Type',
+    'Lab Test UOM',
+    'Dictionary Concept',
+    'Concept FormKey Controls',
+    'Lab Results Implications',
+    'Signs And Symptoms',
+    'ICD11 Collection',
+    'Description Reports Mapping',
+    'Lab Test Sample',
+    'Lab Test Template',
+    'Clinical Procedure Template',
+    'Workflow',
+    'Health Program',
+    'Health Program Workflow',
+    'Health Program Field Mapping',
+]
+
+
+@frappe.whitelist()
+def run_all_syncs(producer_url='https://master.tiberbu.health', action='Update', mode='Merge'):
+    """Run every registered doctype's Sync (insert) or Update in dependency
+    order as one long background job. Per-doctype failures are logged and the
+    run continues. Track with get_run_all_status(run_id)."""
+    if action not in ("Sync", "Update"):
+        action = "Update"
+    if mode not in ("Merge", "Mirror"):
+        mode = "Merge"
+    run_id = now().replace(" ", "_").replace(":", "").replace(".", "") + "_" + str(frappe.generate_hash(length=6))
+    payload = {
+        "status": "Running",
+        "action": action,
+        "mode": mode,
+        "total": len(SYNC_DEPENDENCY_ORDER),
+        "current": 0,
+        "current_doctype": None,
+        "started": now(),
+        "results": {},
+    }
+    frappe.cache().set(f"run_all:{run_id}", payload, 24 * 3600)
+    enqueue(method=_run_all_syncs, queue='long', timeout=21600,
+            producer_url=producer_url, action=action, mode=mode, run_id=run_id)
+    return {"run_id": run_id}
+
+
+def _run_all_syncs(producer_url, action, mode, run_id):
+    cache_key = f"run_all:{run_id}"
+    state = frappe.cache().get(cache_key) or {"results": {}}
+    for i, doctype in enumerate(SYNC_DEPENDENCY_ORDER, start=1):
+        state.update({"current": i, "current_doctype": doctype})
+        frappe.cache().set(cache_key, state, 24 * 3600)
+        started = now()
+        try:
+            if action == "Sync":
+                insert_non_existing_records(producer_url, doctype)
+            else:
+                update_existing_records(producer_url, doctype, mode)
+            state["results"][doctype] = {"status": "Completed", "started": started, "finished": now()}
+        except Exception as e:
+            frappe.log_error(f"Run All ({action}) failed for {doctype}: {e}", "Run All Failure")
+            state["results"][doctype] = {"status": "Failed", "started": started, "finished": now()}
+        frappe.cache().set(cache_key, state, 24 * 3600)
+    state.update({"status": "Completed", "current_doctype": None, "finished": now()})
+    frappe.cache().set(cache_key, state, 24 * 3600)
+
+
+@frappe.whitelist()
+def get_run_all_status(run_id):
+    state = frappe.cache().get(f"run_all:{run_id}")
+    if not state:
+        return {"status": "Unknown", "message": "run expired or not found", "results": {}, "total": len(SYNC_DEPENDENCY_ORDER), "current": 0, "current_doctype": None}
+    return state
+
+
 # bench execute event_streaming.event_streaming.api.frappe_client_transfers.execute_doctype_fetch_and_sync Clinical Procedure Template
 @frappe.whitelist()
 def execute_doctype_fetch_and_sync(producer_url='https://master.tiberbu.health',doctype='Item Group'):
