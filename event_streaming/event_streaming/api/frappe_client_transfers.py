@@ -185,12 +185,45 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
     target_names = {item['name'] for item in target_client.get_list(doctype, fields=["name"], limit_page_length=999999, filters=target_filters)}
     source_names = {item['name'] for item in source_client.get_list(doctype, fields=["name"], limit_page_length=999999, filters=filters)}
 
-    # compare case-insensitively: MySQL's unique index uses a case-insensitive
-    # collation, so a source name that differs only by case from a local name
-    # ("100S" vs "100s") is NOT missing — inserting it would fail the duplicate
-    # key check every run and never converge
-    target_lower = {cstr(n).lower() for n in target_names}
-    items_in_source_not_in_target = {n for n in source_names if cstr(n).lower() not in target_lower}
+    # A record is "missing" only when its STABLE identity is absent locally.
+    # Most doctypes key on name (case-insensitive: the unique index uses a
+    # case-insensitive collation, so "100S" vs "100s" is already present). Three
+    # doctypes need a different key because their stored name is unreliable:
+    #   Item: the diff above uses a filtered local set (disabled=0, ...), but the
+    #     name key is global — an item present yet filtered out is still "taken"
+    #     and re-inserting 1062s. Key on the full local name set (item_code is
+    #     unreliable: it gets suffixed -1 by the dedup logic while the name stays).
+    #   Description Reports Mapping: the name auto-generates on insert
+    #     (MAPPING-{description}-{#####}), so it is never stable — the name diff
+    #     re-inserts the same reports every run, piling up unbounded duplicates.
+    #     Key on description instead (idempotent: once present, skipped).
+    #   Health Program Field Mapping: the name is {form_name}-{form_field_name};
+    #     a malformed master name (empty field) still regenerates to a name that
+    #     already exists locally, so the insert 1062s. Key on the field pair.
+    if doctype == "Item":
+        target_lower = {cstr(item.get("name")).lower() for item in target_client.get_list(doctype, fields=["name"], limit_page_length=999999)}
+        items_in_source_not_in_target = {n for n in source_names if cstr(n).lower() not in target_lower}
+    elif original_doctype == "Description Reports Mapping":
+        src = source_client.get_list(doctype, fields=["name", "description"], limit_page_length=999999, filters=filters)
+        tgt_keys = {cstr(r.get("description")).lower() for r in target_client.get_list(doctype, fields=["description"], limit_page_length=999999)}
+        items_in_source_not_in_target = {r["name"] for r in src if cstr(r.get("description")).lower() not in tgt_keys}
+    elif original_doctype == "Health Program Field Mapping":
+        src = source_client.get_list(doctype, fields=["name", "form_name", "form_field_name"], limit_page_length=999999, filters=filters)
+        tgt = target_client.get_list(doctype, fields=["name", "form_name", "form_field_name"], limit_page_length=999999)
+        # present if the name OR the generated {form_name}-{form_field_name}
+        # already exists locally (local copies sometimes carry a tweaked
+        # form_field_name, e.g. apgarScore vs apgarScore1, so the generated name
+        # alone does not always reconstruct)
+        tgt_names = {cstr(r.get("name")).lower() for r in tgt}
+        tgt_pairs = {f"{cstr(r.get('form_name'))}-{cstr(r.get('form_field_name'))}".lower() for r in tgt}
+        items_in_source_not_in_target = {
+            r["name"] for r in src
+            if cstr(r.get("name")).lower() not in tgt_names
+            and f"{cstr(r.get('form_name'))}-{cstr(r.get('form_field_name'))}".lower() not in tgt_pairs
+        }
+    else:
+        target_lower = {cstr(n).lower() for n in target_names}
+        items_in_source_not_in_target = {n for n in source_names if cstr(n).lower() not in target_lower}
     list2 = source_client.get_list(doctype, fields=fields, limit_page_length=999999, filters=filters)
     print(len(source_names))
     print(len(target_names))
@@ -899,12 +932,45 @@ def get_sync_status(producer_url='https://master.tiberbu.health', doctype='Queue
         fields=["name"],
     )}
 
-    # case-insensitive: a source name that differs only by case from a local
-    # name is already present (the unique index is case-insensitive), so it is
-    # not "missing" — counting it would pin the percentage below 100 and the
-    # sync cron would re-trigger this doctype forever
-    target_lower = {cstr(n).lower() for n in target_names}
-    missing = {n for n in source_names if cstr(n).lower() not in target_lower}
+    # "missing" = source records whose STABLE identity is absent locally. Most
+    # doctypes key on name (case-insensitive — the unique index uses a
+    # case-insensitive collation). Three doctypes need a different key because
+    # the stored name is unreliable (keeps the dashboard and the actual sync in
+    # agreement, so the percentage reaches 100 once covered and the cron stops
+    # re-triggering):
+    #   Item: key on the FULL local name set (a filtered-out item is still
+    #     "covered"; item_code alone is unreliable — suffixed -1 by dedup).
+    #   Description Reports Mapping: name auto-generates on insert
+    #     (MAPPING-{description}-{#####}), so the name never matches and the
+    #     diff re-inserts the same reports forever. Key on description.
+    #   Health Program Field Mapping: name is {form_name}-{form_field_name}; a
+    #     malformed master name still regenerates to an existing local name and
+    #     1062s. Key on the field pair.
+    if doctype_query == "Item":
+        tgt_keys = {cstr(r.get("name")).lower() for r in frappe.db.get_all("Item", fields=["name"])}
+        src_records = source_client.get_list(doctype_query, fields=["name"], filters=filters, limit_page_length=999999)
+        missing = {r["name"] for r in src_records if cstr(r.get("name")).lower() not in tgt_keys}
+    elif doctype_query == "Description Reports Mapping":
+        tgt_keys = {cstr(r.get("description")).lower() for r in frappe.db.get_all("Description Reports Mapping", fields=["description"])}
+        src_records = source_client.get_list(doctype_query, fields=["name", "description"], filters=filters, limit_page_length=999999)
+        missing = {r["name"] for r in src_records if cstr(r.get("description")).lower() not in tgt_keys}
+    elif doctype_query == "Health Program Field Mapping":
+        tgt = frappe.db.get_all("Health Program Field Mapping", fields=["name", "form_name", "form_field_name"])
+        # present if the name OR the generated {form_name}-{form_field_name}
+        # already exists locally (local copies sometimes carry a tweaked
+        # form_field_name, e.g. apgarScore vs apgarScore1, so the generated name
+        # alone does not always reconstruct)
+        tgt_names = {cstr(r.get("name")).lower() for r in tgt}
+        tgt_pairs = {f"{cstr(r.get('form_name'))}-{cstr(r.get('form_field_name'))}".lower() for r in tgt}
+        src_records = source_client.get_list(doctype_query, fields=["name", "form_name", "form_field_name"], filters=filters, limit_page_length=999999)
+        missing = {
+            r["name"] for r in src_records
+            if cstr(r.get("name")).lower() not in tgt_names
+            and f"{cstr(r.get('form_name'))}-{cstr(r.get('form_field_name'))}".lower() not in tgt_pairs
+        }
+    else:
+        tgt_keys = {cstr(n).lower() for n in target_names}
+        missing = {n for n in source_names if cstr(n).lower() not in tgt_keys}
 
     source_count = len(source_names)
     target_count = len(target_names)
