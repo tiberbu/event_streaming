@@ -920,6 +920,7 @@ def get_sync_status(producer_url='https://master.tiberbu.health', doctype='Queue
             "percentage": percentage,
             "percentage_progress":percentage_progress,
             "missing": len(missing),
+            "present": source_count - len(missing),
             "success": success,
             "failed": failed,
             "status": status,
