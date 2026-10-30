@@ -14,8 +14,11 @@ def run_instance_setup(snooping=False):
     # check status of the last doctype (Description Reports Mapping)
     final_status = get_sync_status(master_url, "Description Reports Mapping").get("percentage", 0)
 
-    # if fully synced, only allow run every 1 hour
-    if final_status > 100:
+    # if fully synced, only allow run every 1 hour.
+    # get_sync_status caps percentage at 100, so the "fully synced" test is
+    # >= 100 — with > 100 the throttle was dead and the cron re-synced (and
+    # re-logged / re-commented) any doctype stuck below 100 every 3 minutes.
+    if final_status >= 100:
         last_run_str = frappe.conf.LAST_RUN_KEY
         if last_run_str:
             last_run = datetime.fromisoformat(last_run_str)

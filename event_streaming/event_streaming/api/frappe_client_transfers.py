@@ -1,7 +1,8 @@
 
 from frappe.frappeclient import FrappeClient
 import frappe
-from frappe.utils.data import now 
+from frappe.utils.data import now
+from frappe.utils import cstr
 from frappe.utils.background_jobs import enqueue
 from erpnext.controllers.item_variant import (
 	get_variant,
@@ -78,6 +79,18 @@ def run_all_syncs(producer_url='https://master.tiberbu.health', action='Update',
     return {"run_id": run_id}
 
 
+def _latest_sync_progress(doctype):
+    """Freshest Data Sync Progress row for a doctype (the one the live job is
+    writing to), as a dict, or None if the job hasn't created one yet."""
+    return frappe.db.get_value(
+        "Data Sync Progress",
+        {"document_type": doctype},
+        ["name", "total_records", "processed", "success", "failed", "status", "synced_at"],
+        order_by="creation desc",
+        as_dict=True,
+    )
+
+
 def _run_all_syncs(producer_url, action, mode, run_id):
     cache_key = f"run_all:{run_id}"
     state = frappe.cache().get_value(cache_key) or {"results": {}}
@@ -90,10 +103,15 @@ def _run_all_syncs(producer_url, action, mode, run_id):
                 insert_non_existing_records(producer_url, doctype)
             else:
                 update_existing_records(producer_url, doctype, mode)
-            state["results"][doctype] = {"status": "Completed", "started": started, "finished": now()}
+            result = {"status": "Completed", "started": started, "finished": now()}
         except Exception as e:
             frappe.log_error(f"Run All ({action}) failed for {doctype}: {e}", "Run All Failure")
-            state["results"][doctype] = {"status": "Failed", "started": started, "finished": now()}
+            result = {"status": "Failed", "started": started, "finished": now()}
+        progress = _latest_sync_progress(doctype)
+        if progress:
+            result["success"] = int(progress.get("success") or 0)
+            result["failed"] = int(progress.get("failed") or 0)
+        state["results"][doctype] = result
         frappe.cache().set_value(cache_key, state, expires_in_sec=24 * 3600)
     state.update({"status": "Completed", "current_doctype": None, "finished": now()})
     frappe.cache().set_value(cache_key, state, expires_in_sec=24 * 3600)
@@ -104,6 +122,23 @@ def get_run_all_status(run_id):
     state = frappe.cache().get_value(f"run_all:{run_id}")
     if not state:
         return {"status": "Unknown", "message": "run expired or not found", "results": {}, "total": len(SYNC_DEPENDENCY_ORDER), "current": 0, "current_doctype": None}
+    # record-level progress of the doctype that is running right now
+    if state.get("status") == "Running" and state.get("current_doctype"):
+        progress = _latest_sync_progress(state["current_doctype"])
+        state["current_progress"] = (
+            {
+                "document_type": state["current_doctype"],
+                "total_records": int(progress.get("total_records") or 0),
+                "processed": int(progress.get("processed") or 0),
+                "success": int(progress.get("success") or 0),
+                "failed": int(progress.get("failed") or 0),
+                "status": progress.get("status"),
+            }
+            if progress
+            else None
+        )
+    else:
+        state["current_progress"] = None
     return state
 
 
@@ -119,6 +154,7 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
     clients = get_source_and_target_frappe_client_obj(producer_url)
     source_client = clients.get('source_client')
     target_client = clients.get('target_client')
+    original_doctype = doctype
     filters={}
     if doctype == 'Item Alternative':
         doctype = "Item"
@@ -143,17 +179,37 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
     target_filters = filters.copy()
     target_filters.pop("creation", None)
 
-    list1 = target_client.get_list(doctype, fields=fields, limit_page_length=50000,filters=target_filters)
-    list2 = source_client.get_list(doctype, fields=fields, limit_page_length=50000,filters=filters)
-    
-    
-    target_names = {item['name'] for item in list1}
-    source_names = {item['name'] for item in list2}
+    # Diff by name only, then fetch full docs just for the missing records.
+    # (Fetching every field for every row truncates the diff at the page limit
+    # and loads unbounded data into memory — wrong for any large doctype.)
+    target_names = {item['name'] for item in target_client.get_list(doctype, fields=["name"], limit_page_length=999999, filters=target_filters)}
+    source_names = {item['name'] for item in source_client.get_list(doctype, fields=["name"], limit_page_length=999999, filters=filters)}
 
-    items_in_source_not_in_target = source_names - target_names
+    # compare case-insensitively: MySQL's unique index uses a case-insensitive
+    # collation, so a source name that differs only by case from a local name
+    # ("100S" vs "100s") is NOT missing — inserting it would fail the duplicate
+    # key check every run and never converge
+    target_lower = {cstr(n).lower() for n in target_names}
+    items_in_source_not_in_target = {n for n in source_names if cstr(n).lower() not in target_lower}
+    list2 = source_client.get_list(doctype, fields=fields, limit_page_length=999999, filters=filters)
     print(len(source_names))
     print(len(target_names))
     print(doctype," Items Missing In Source:",len(items_in_source_not_in_target))
+
+    # progress row for the live job (document_type keeps the original doctype so
+    # the per-doctype status endpoint keeps working for Item's sub-filters)
+    progress = frappe.get_doc({
+        "doctype": "Data Sync Progress",
+        "document_type": original_doctype,
+        "total_records": len(items_in_source_not_in_target),
+        "processed": 0,
+        "success": 0,
+        "failed": 0,
+        "status": "Running",
+        "synced_at": None
+    })
+    progress.insert(ignore_permissions=True)
+    frappe.db.commit()
     # print(items_in_source_not_in_target)
     
     try:
@@ -172,6 +228,7 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
                 break
 
             docs_to_insert = []
+            skipped_docs = 0
 
             for document in documents_batch:
                 num += 1
@@ -180,6 +237,7 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
 
                 if doctype == 'Item' and item_name in ['IBUPROFEN','Ibuprofen SUSPENSION-60ml','Aceclofenac/Paracetamol/','ALBENDAZOLE','METRONIDAZOLE','ATORVASTATIN CALCIUM','CHLORAMPHENICOL']:
                     print(f"Skipping problematic Item: {item_name}")
+                    skipped_docs += 1
                     continue
 
                 data = {
@@ -217,6 +275,21 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
                         for child_field in child_table_fields:
                             data[child_field] = clean_child_rows(parent_data.get(child_field))
 
+                # master carries duplicate UOM Conversion rows (e.g. two "Unit"
+                # rows); inserting them fails the UOM uniqueness validation, so
+                # keep the first of each (case-folded) UOM — same key
+                # merge_child_table uses
+                if doctype == 'Item' and data.get("uoms"):
+                    seen = set()
+                    deduped = []
+                    for row in data["uoms"]:
+                        key = str(row.get("uom") or "").lower()
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        deduped.append(row)
+                    data["uoms"] = deduped
+
                 print('add to insert ',data.get('name'))
                 # if doctype == 'Item' and frappe.db.exists('Item',{'name':data.get('name')}):
                 #     new_code = "{0}-1".format(data.get('item_code'))
@@ -230,16 +303,27 @@ def insert_non_existing_records(producer_url,doctype="Item Alternative"):
                 try:
                     target_client.insert_many(docs_to_insert)
                     print(f"{len(docs_to_insert)} documents successfully inserted.")
+                    progress.success += len(docs_to_insert)
                 except Exception as insert_exception:
                     failed_name = docs_to_insert[0].get("name")
                     print(f"Insert failed for {failed_name}: {insert_exception}")
                     frappe.log_error(f"Insert failed for {doctype}/{failed_name}: {insert_exception}", "Sync Insert Failure")
+                    progress.failed += len(docs_to_insert)
+
+            progress.processed += len(docs_to_insert) + skipped_docs
+            progress.save(ignore_permissions=True)
+            frappe.db.commit()
 
             limit_start += batch_size
-        
 
     except Exception as e:
-        frappe.throw(f"An error occurred: {e}")
+        frappe.log_error(f"An error occurred during {doctype} insert: {e}", "Sync Insert Failure")
+        raise
+    finally:
+        progress.synced_at = now()
+        progress.status = "Completed"
+        progress.save(ignore_permissions=True)
+        frappe.db.commit()
 
 # bench execute event_streaming.event_streaming.api.frappe_client_transfers.update_existing_records
 @frappe.whitelist()
@@ -262,13 +346,14 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
 	# 			["modified", ">", "2025-07-06 08:56:26.272219"]
 	# 		]
         
+    original_doctype = doctype
     if doctype == 'Item Alternative':
         doctype = "Item"
         filters = {"is_stock_item": 1, "has_variants": 1, "custom_is_ppb_drug": 1,"disabled":0}  # only clean drugs
 
     elif doctype == 'Item':
         filters = {"is_stock_item": 1, "has_variants": 0, "custom_is_ppb_drug": 1,"disabled":0}
-        
+
     elif doctype == 'Labs And Procedures Items':
         doctype = "Item"
         filters = {"is_stock_item": 0,"disabled":0}
@@ -290,7 +375,7 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
 
     progress = frappe.get_doc({
         "doctype": "Data Sync Progress",
-        "document_type": doctype,
+        "document_type": original_doctype,
         "total_records": total,
         "processed": 0,
         "success": 0,
@@ -308,7 +393,11 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
         try:
             source_doc = source_client.get_doc(doctype, name)
             if not source_doc:
-                raise RuntimeError(f"Source document {doctype}/{name} not found on master")
+                # name vanished from the master after the snapshot was taken —
+                # skip, it is not a sync failure
+                print(f"Skipping {name}: not found on master")
+                frappe.log_error(f"Source document {doctype}/{name} not found on master", "Sync Source Missing")
+                raise SkipRecord()
             update_data = {
                 "doctype": doctype,
                 "name": name,
@@ -316,6 +405,16 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
 
             for field in fields:
                 update_data[field] = source_doc.get(field)
+
+            # series is set_only_once: on auto-named doctypes it is fixed at
+            # creation, and the source's value often differs from the local one
+            # (auto-numbering diverged). Copying it over trips
+            # CannotChangeConstantError on every such update — the name can't
+            # change on an update anyway, so keep the local series.
+            if update_data.get("series"):
+                local_series = frappe.db.get_value(doctype, name, "series")
+                if cstr(local_series) != cstr(update_data["series"]):
+                    update_data.pop("series")
 
             if doctype in ('Clinical Procedure Template', 'Lab Test Template'):
                 remote_item = source_doc.get('item')
@@ -363,6 +462,10 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
                 else:
                     # Mirror: replace local child rows with master's exactly
                     update_data[child_field] = clean_child_rows(source_doc.get(child_field))
+
+            if doctype == "Item":
+                _apply_item_update_guards(update_data)
+
             # Perform the update
             clean_data = clean_update_data(update_data)
             target_client.update(clean_data)
@@ -371,6 +474,9 @@ def update_existing_records(producer_url='https://master.tiberbu.health',doctype
             
             progress.success += 1
 
+        except SkipRecord:
+            # logged at the raise site; counted as processed (finally) but not failed
+            pass
         except Exception as e:
             frappe.log_error(f"Failed to update {name}: {e}", "Update Failure")
 
@@ -419,6 +525,10 @@ _CHILD_ROW_SYSTEM_FIELDS = (
     "parent", "parentfield", "parenttype", "idx", "docstatus",
 )
 
+# fields dropped from child rows on copy (variant_of on Item Variant Attribute
+# references master-only items — see clean_child_rows)
+_CHILD_ROW_DROP_FIELDS = ("variant_of",)
+
 
 def _child_row_key(row, fields):
     """Stable identity of a child row.
@@ -435,6 +545,11 @@ def _child_row_key(row, fields):
     if "attribute_value" in fields:
         value = row.get("attribute_value")
         return ("attribute_value", str(value).lower() if value is not None else None)
+    if "uom" in fields:
+        # UOM Conversion.uom is validated case-insensitively (UOM doctype
+        # duplicate check); lowercase so a case-duplicate pair converges
+        value = row.get("uom")
+        return ("uom", str(value).lower() if value is not None else None)
     return tuple(row.get(f) for f in fields)
 
 
@@ -462,7 +577,7 @@ def merge_child_table(local_rows, source_rows):
     for r in (local_rows or []) + (source_rows or []):
         if isinstance(r, dict):
             row_fields |= set(r.keys())
-    value_fields = [f for f in row_fields if f not in _CHILD_ROW_SYSTEM_FIELDS]
+    value_fields = [f for f in row_fields if f not in _CHILD_ROW_SYSTEM_FIELDS and f not in _CHILD_ROW_DROP_FIELDS]
     if not value_fields:
         return [copy.deepcopy(row) for row in (local_rows or []) if isinstance(row, dict)]
 
@@ -505,6 +620,12 @@ def merge_child_table(local_rows, source_rows):
 
     kept = [row for row in merged if id(row) not in drop_ids]
     for i, row in enumerate(kept):
+        # dropped fields are excluded from value_fields but the deep-copied local
+        # rows still carry them; strip from output so a poisoned/stale link (e.g.
+        # Item Variant Attribute.variant_of -> a master-only item) is never re-sent,
+        # which would otherwise fail the whole save with LinkValidationError.
+        for f in _CHILD_ROW_DROP_FIELDS:
+            row.pop(f, None)
         row["idx"] = i + 1
     return kept
 
@@ -514,6 +635,88 @@ def clean_update_data(update_data):
     for field in ["creation", "created_on", "created_by", "modified", "modified_by", "owner"]:
         update_data.pop(field, None)
     return update_data
+
+
+class SkipRecord(Exception):
+    """A record to skip (data gap or stale snapshot); not a sync failure."""
+
+
+def _stock_uom_change_is_blocked(item_code, new_uom):
+    """Mirror of erpnext's check_stock_uom_with_bin: True when local
+    Stock Ledger Entry / Bin state rejects a stock_uom change."""
+    current_uom = frappe.db.get_value("Item", item_code, "stock_uom")
+    if not new_uom or cstr(new_uom) == cstr(current_uom):
+        return False
+    ref_uom = frappe.db.get_value("Stock Ledger Entry", {"item_code": item_code}, "stock_uom")
+    if ref_uom and cstr(ref_uom) != cstr(new_uom):
+        return True
+    blocked_bins = frappe.db.sql(
+        "SELECT name FROM `tabBin` WHERE item_code = %s "
+        "AND (reserved_qty > 0 OR ordered_qty > 0 OR indented_qty > 0 OR planned_qty > 0) "
+        "AND stock_uom != %s",
+        (item_code, new_uom),
+    )
+    return bool(blocked_bins)
+
+
+def _dedupe_item_uom_rows(update_data):
+    # the master's UOM Conversion table carries duplicate rows (both same-case
+    # dupes like two "Unit" and case-dupes like "60s"/"60S"); Item.validate
+    # rejects a UOM listed more than once. Merge mode already converges via
+    # _child_row_key, but Mirror mode replaces the local rows with master's
+    # exactly, so the master's own duplicates still reach the save — keep the
+    # first of each (case-folded) UOM.
+    rows = update_data.get("uoms")
+    if not rows:
+        return
+    seen = set()
+    deduped = []
+    for row in rows:
+        key = cstr(row.get("uom")).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+    update_data["uoms"] = deduped
+
+
+def _apply_item_update_guards(update_data):
+    """Item-only pre-update safety nets for erpnext validations a master
+    payload would trip:
+    - stock_uom: drop the change when local transactions block it
+    - uoms: drop duplicate UOM Conversion rows (case-folded)
+    - attributes: a variant's rows must exist on the local template; drop rows
+      the local template lacks, and skip the record if nothing usable remains
+      for a variant/template with variant_based_on 'Item Attribute'
+    """
+    name = update_data.get("name")
+
+    _dedupe_item_uom_rows(update_data)
+
+    if _stock_uom_change_is_blocked(name, update_data.get("stock_uom")):
+        frappe.log_error(
+            f"{name}: stock_uom change to {update_data.get('stock_uom')} is blocked by local transactions; keeping local UOM",
+            "Sync Skipped",
+        )
+        update_data.pop("stock_uom", None)
+
+    variant_of = update_data.get("variant_of")
+    attrs = update_data.get("attributes")
+    if variant_of and attrs:
+        template_attrs = {
+            r[0]
+            for r in frappe.db.get_all(
+                "Item Variant Attribute", filters={"parent": variant_of}, pluck="attribute"
+            )
+        }
+        attrs = [row for row in attrs if row.get("attribute") in template_attrs]
+        update_data["attributes"] = attrs
+    if (variant_of or update_data.get("has_variants")) and update_data.get("variant_based_on") == "Item Attribute" and not attrs:
+        frappe.log_error(
+            f"{name}: variant_based_on is 'Item Attribute' but no usable attribute rows (master/template data gap); skipping update",
+            "Sync Skipped",
+        )
+        raise SkipRecord()
 
 
 # bench execute event_streaming.event_streaming.api.frappe_client_transfers.get_doctype_fields
@@ -673,22 +876,40 @@ def get_sync_status(producer_url='https://master.tiberbu.health', doctype='Queue
         percentage_progress = 0
 
     # ----------------------------
-    # Get live counts from source/target
+    # Get live names from source/target (a set difference, not a count ratio)
     # ----------------------------
+    # A count ratio (target_count / source_count) saturates once the target has
+    # as many rows as the source and can exceed 100% when the target holds extra
+    # records — so it cannot tell "fully synced" apart from "missing N specific
+    # records." The real completeness signal is the set difference: records that
+    # exist on the source but are absent on the target.
     clients = get_source_and_target_frappe_client_obj(producer_url)
     source_client = clients.get('source_client')
 
-    source_count = len(source_client.get_list(
+    source_names = {row["name"] for row in source_client.get_list(
         doctype_query,
         fields=["name"],
         filters=filters,
         limit_page_length=999999
-    ))
+    )}
 
-    target_count = int(frappe.db.count(doctype_query, filters=target_filters))
+    target_names = {row.get("name") for row in frappe.db.get_all(
+        doctype_query,
+        filters=target_filters,
+        fields=["name"],
+    )}
 
-    percentage = (target_count / source_count * 100) if source_count != 0 else 0
+    # case-insensitive: a source name that differs only by case from a local
+    # name is already present (the unique index is case-insensitive), so it is
+    # not "missing" — counting it would pin the percentage below 100 and the
+    # sync cron would re-trigger this doctype forever
+    target_lower = {cstr(n).lower() for n in target_names}
+    missing = {n for n in source_names if cstr(n).lower() not in target_lower}
 
+    source_count = len(source_names)
+    target_count = len(target_names)
+    # coverage of the source set by the target; capped at 100, 0 when nothing to sync
+    percentage = ((source_count - len(missing)) / source_count * 100) if source_count else 0
 
     # ----------------------------
     # Combine results
@@ -698,10 +919,11 @@ def get_sync_status(producer_url='https://master.tiberbu.health', doctype='Queue
             "master": source_count,
             "percentage": percentage,
             "percentage_progress":percentage_progress,
+            "missing": len(missing),
             "success": success,
             "failed": failed,
             "status": status,
-            "synced_at": synced_at  
+            "synced_at": synced_at
     }
 
 
